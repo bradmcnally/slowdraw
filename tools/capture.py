@@ -91,6 +91,21 @@ def request_variant(fd, variant, timeout=30):
         data.extend(read_some(fd))
 
 
+def request_seed(fd, seed, timeout=30):
+    data = bytearray()
+    deadline = time.monotonic() + timeout
+    next_request = time.monotonic()
+    marker = f"SDSEED {seed:08X}".encode()
+    command = f"SEED {seed:08X}\n".encode()
+    while marker not in data:
+        if time.monotonic() > deadline:
+            raise SystemExit("The device did not confirm the requested seed.")
+        if time.monotonic() >= next_request:
+            os.write(fd, command)
+            next_request = time.monotonic() + 8.0
+        data.extend(read_some(fd))
+
+
 def read_exact(fd, initial, count, timeout=120):
     data = bytearray(initial)
     deadline = time.monotonic() + timeout
@@ -137,7 +152,10 @@ def main():
     parser.add_argument("--port")
     parser.add_argument("--no-reset", action="store_true", help="try capturing without resetting the sleeping device")
     parser.add_argument("--variant", type=int, help="render and select this same-day variant before capture")
+    parser.add_argument("--seed", type=lambda value: int(value, 16), help="temporarily recreate an eight-digit hexadecimal seed")
     args = parser.parse_args()
+    if args.variant is not None and args.seed is not None:
+        parser.error("--variant and --seed cannot be used together")
     output_path = args.output or next_capture_path()
     port = args.port or find_port()
 
@@ -149,6 +167,8 @@ def main():
             time.sleep(0.4)
         if args.variant is not None:
             request_variant(fd, args.variant)
+        elif args.seed is not None:
+            request_seed(fd, args.seed)
         response = request_frame(fd, 20)
         header_start = response.index(b"SDFRAME ")
         while b"\n" not in response[header_start:]:

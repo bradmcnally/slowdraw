@@ -36,6 +36,12 @@ variant. The original slow draw is variant zero; alternates are identified by
 `/1`, `/2`, and so on. Between presses the ESP32 uses light sleep, waking from
 the rocker or automatically just after midnight.
 
+Pressing the rocker left or right cycles the persistent recipe preference:
+`ALL`, `CELLULAR`, `PIXEL FIELD`, `SUBDIVISION`, and `DITHER`. The selected name
+briefly appears in the center of the footer and then disappears. A specific
+recipe constrains center-button variants and future daily prints to that family;
+`ALL` retains deterministic selection across every active family.
+
 ## Build and upload
 
 Install PlatformIO, connect the M5Paper 1.1, then run:
@@ -50,7 +56,12 @@ If the device RTC is unset, the firmware initializes it from the computer's
 local build timestamp on first boot. No Wi-Fi or manual clock setup is needed.
 
 The display is targeted at 960 × 540 in landscape orientation. Generator output
-is deterministic for `(date, generator version)`. Changing
+is deterministic for `(date, variant, generator version, recipe mode)`. The
+recipe mode is folded into the full 32-bit seed, so the same date and variant
+have distinct seeds in each locked recipe. `ALL` preserves the original seed
+sequence. The seed's top two bits encode the actual recipe, making the complete
+eight-digit hexadecimal seed sufficient to replay the artwork by itself. The
+footer displays that complete seed rather than a shortened suffix. Changing
 `kGeneratorVersion` intentionally starts a new sequence.
 
 ## Framebuffer capture
@@ -68,6 +79,13 @@ the same artwork before transferring the framebuffer. Pass `--no-reset` to try
 capturing without a reset.
 Use `--variant NUMBER` to recreate, select, and capture a particular same-day
 variant. The selected variant persists across restarts for the current date.
+
+To temporarily recreate and capture an artwork from its complete displayed
+seed, without changing the RTC or saved current print:
+
+```sh
+./tools/capture.py --seed E92B7DE2
+```
 
 To recolor a capture with the muted, slightly warm 16-tone palette measured
 from the photographed M5Paper display:

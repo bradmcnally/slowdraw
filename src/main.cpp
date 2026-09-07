@@ -12,7 +12,10 @@ namespace {
 M5Canvas printCanvas(&M5.Display);
 Preferences preferences;
 constexpr gpio_num_t kRockerPressPin = GPIO_NUM_38;
+constexpr gpio_num_t kRockerLeftPin = GPIO_NUM_37;
+constexpr gpio_num_t kRockerRightPin = GPIO_NUM_39;
 uint32_t variant = 0;
+uint8_t recipeMode = 0;
 m5::rtc_date_t displayedDate;
 char serialLine[24] = {};
 size_t serialLineLength = 0;
@@ -25,6 +28,21 @@ uint32_t dateKey(const m5::rtc_date_t& date) {
 void saveVariant(const m5::rtc_date_t& date) {
   preferences.putUInt("date", dateKey(date));
   preferences.putUInt("variant", variant);
+}
+
+void saveRecipeMode() { preferences.putUChar("recipe", recipeMode); }
+
+const char* recipeModeName() {
+  static const char* names[] = {"ALL", "CELLULAR", "PIXEL FIELD", "SUBDIVISION", "DITHER"};
+  return names[recipeMode];
+}
+
+slow_draw::System selectedSystem() {
+  static const slow_draw::System systems[] = {
+      slow_draw::System::CellularAggregate, slow_draw::System::CellularAggregate,
+      slow_draw::System::PixelField, slow_draw::System::Subdivision,
+      slow_draw::System::DitherPressure};
+  return systems[recipeMode];
 }
 
 bool validDate(const m5::rtc_date_t& date) {
@@ -64,11 +82,36 @@ bool sameDate(const m5::rtc_date_t& a, const m5::rtc_date_t& b) {
   return a.year == b.year && a.month == b.month && a.date == b.date;
 }
 
-void showPrint(const m5::rtc_date_t& date) {
-  const auto info = slow_draw::makePrintInfo(date.year, date.month, date.date, variant);
+void showPrint(const m5::rtc_date_t& date, bool announceRecipe = false) {
+  auto info = slow_draw::makePrintInfo(date.year, date.month, date.date, variant,
+                                       recipeMode);
+  if (recipeMode != 0) info.system = selectedSystem();
   slow_draw::renderPrint(printCanvas, info);
+  if (announceRecipe) {
+    printCanvas.fillRect(300, slow_draw::kCanvasHeight - slow_draw::kFooterHeight,
+                         360, slow_draw::kFooterHeight, 15);
+    printCanvas.setTextColor(0, 15);
+    printCanvas.setTextSize(2);
+    printCanvas.setTextDatum(middle_center);
+    printCanvas.drawString(recipeModeName(), slow_draw::kCanvasWidth / 2,
+                           slow_draw::kCanvasHeight - slow_draw::kFooterHeight / 2);
+  }
   printCanvas.pushSprite(0, 0);
   Serial.printf("%s / %s\n", info.identity, slow_draw::systemName(info.system));
+  if (announceRecipe) {
+    delay(1200);
+    slow_draw::renderPrint(printCanvas, info);
+    printCanvas.pushSprite(0, 0);
+  }
+}
+
+void showSeed(uint32_t seed) {
+  const auto info = slow_draw::makeSeedPrintInfo(seed);
+  slow_draw::renderPrint(printCanvas, info);
+  printCanvas.pushSprite(0, 0);
+  Serial.printf("SDSEED %08X\n", unsigned(seed));
+  Serial.flush();
+  delay(1000);
 }
 
 void sendFramebuffer() {
@@ -112,6 +155,12 @@ void processSerial() {
           // Keep the command window open for the capture request that follows.
           delay(1000);
         }
+      } else if (std::strncmp(serialLine, "SEED ", 5) == 0) {
+        char* end = nullptr;
+        const unsigned long requested = std::strtoul(serialLine + 5, &end, 16);
+        if (end != serialLine + 5 && *end == '\0') {
+          showSeed(static_cast<uint32_t>(requested));
+        }
       }
       serialLineLength = 0;
     } else if (serialLineLength + 1 < sizeof(serialLine)) {
@@ -123,10 +172,14 @@ void processSerial() {
 }
 
 void sleepUntilPressOrTomorrow() {
-  while (digitalRead(kRockerPressPin) == LOW) delay(10);
+  while (digitalRead(kRockerLeftPin) == LOW || digitalRead(kRockerPressPin) == LOW ||
+         digitalRead(kRockerRightPin) == LOW) delay(10);
   const auto time = M5.Rtc.getTime();
   esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
-  esp_sleep_enable_ext0_wakeup(kRockerPressPin, LOW);
+  gpio_wakeup_enable(kRockerLeftPin, GPIO_INTR_LOW_LEVEL);
+  gpio_wakeup_enable(kRockerPressPin, GPIO_INTR_LOW_LEVEL);
+  gpio_wakeup_enable(kRockerRightPin, GPIO_INTR_LOW_LEVEL);
+  esp_sleep_enable_gpio_wakeup();
   esp_sleep_enable_timer_wakeup(static_cast<uint64_t>(secondsUntilTomorrow(time)) * 1000000ULL);
   uart_set_wakeup_threshold(UART_NUM_0, 3);
   esp_sleep_enable_uart_wakeup(UART_NUM_0);
@@ -144,6 +197,8 @@ void setup() {
   M5.Display.setRotation(1);
   M5.Display.setEpdMode(epd_mode_t::epd_quality);
   pinMode(kRockerPressPin, INPUT);
+  pinMode(kRockerLeftPin, INPUT);
+  pinMode(kRockerRightPin, INPUT);
 
   auto date = M5.Rtc.getDate();
   auto time = M5.Rtc.getTime();
@@ -163,6 +218,8 @@ void setup() {
   }
 
   displayedDate = date;
+  recipeMode = preferences.getUChar("recipe", 0);
+  if (recipeMode > 4) recipeMode = 0;
   if (preferences.getUInt("date", 0) == dateKey(displayedDate)) {
     variant = preferences.getUInt("variant", 0);
   } else {
@@ -185,6 +242,14 @@ void loop() {
     variant = 0;
     saveVariant(displayedDate);
     showPrint(displayedDate);
+  } else if (digitalRead(kRockerLeftPin) == LOW) {
+    recipeMode = recipeMode == 0 ? 4 : recipeMode - 1;
+    saveRecipeMode();
+    showPrint(displayedDate, true);
+  } else if (digitalRead(kRockerRightPin) == LOW) {
+    recipeMode = recipeMode == 4 ? 0 : recipeMode + 1;
+    saveRecipeMode();
+    showPrint(displayedDate, true);
   } else if (digitalRead(kRockerPressPin) == LOW) {
     ++variant;
     saveVariant(displayedDate);
