@@ -14,9 +14,12 @@ Preferences preferences;
 constexpr gpio_num_t kRockerPressPin = GPIO_NUM_38;
 constexpr gpio_num_t kRockerLeftPin = GPIO_NUM_37;
 constexpr gpio_num_t kRockerRightPin = GPIO_NUM_39;
+constexpr gpio_num_t kTouchWakePin = GPIO_NUM_36;
 uint32_t variant = 0;
 uint8_t recipeMode = 0;
+uint8_t cadenceMode = 0;  // 0 = daily, 1 = hourly
 m5::rtc_date_t displayedDate;
+uint8_t displayedHour = 0;
 char serialLine[24] = {};
 size_t serialLineLength = 0;
 
@@ -25,15 +28,20 @@ uint32_t dateKey(const m5::rtc_date_t& date) {
          static_cast<uint32_t>(date.month) * 100u + date.date;
 }
 
-void saveVariant(const m5::rtc_date_t& date) {
-  preferences.putUInt("date", dateKey(date));
+uint32_t periodKey(const m5::rtc_date_t& date, uint8_t hour) {
+  return dateKey(date) * 100u + (cadenceMode ? hour : 24u);
+}
+
+void saveVariant(const m5::rtc_date_t& date, uint8_t hour) {
+  preferences.putUInt("period", periodKey(date, hour));
   preferences.putUInt("variant", variant);
 }
 
 void saveRecipeMode() { preferences.putUChar("recipe", recipeMode); }
+void saveCadenceMode() { preferences.putUChar("cadence", cadenceMode); }
 
 const char* recipeModeName() {
-  static const char* names[] = {"ALL", "CELLULAR", "PIXEL FIELD", "SUBDIVISION", "DITHER"};
+  static const char* names[] = {"ALL", "CELLULAR", "PIXEL FIELD", "SUBDIVISION", "DITHER", "MURMURATION"};
   return names[recipeMode];
 }
 
@@ -41,7 +49,7 @@ slow_draw::System selectedSystem() {
   static const slow_draw::System systems[] = {
       slow_draw::System::CellularAggregate, slow_draw::System::CellularAggregate,
       slow_draw::System::PixelField, slow_draw::System::Subdivision,
-      slow_draw::System::DitherPressure};
+      slow_draw::System::DitherPressure, slow_draw::System::Murmuration};
   return systems[recipeMode];
 }
 
@@ -56,6 +64,24 @@ bool validDate(const m5::rtc_date_t& date) {
 
 bool validTime(const m5::rtc_time_t& time) {
   return time.hours < 24 && time.minutes < 60 && time.seconds < 60;
+}
+
+m5::rtc_date_t previousDate(m5::rtc_date_t date) {
+  static const uint8_t days[] = {31,28,31,30,31,30,31,31,30,31,30,31};
+  if (date.date > 1) { --date.date; return date; }
+  if (date.month > 1) --date.month; else { date.month=12;--date.year; }
+  uint8_t maximum=days[date.month-1];
+  const bool leap=(date.year%4==0&&date.year%100!=0)||date.year%400==0;
+  if(date.month==2&&leap)maximum=29;
+  date.date=maximum;date.weekDay=(date.weekDay+6)%7;return date;
+}
+
+void currentPrintPeriod(const m5::rtc_date_t& today,const m5::rtc_time_t& now,
+                        m5::rtc_date_t& date,uint8_t& hour) {
+  date=today;hour=now.hours;
+  if(!cadenceMode)return;
+  if(now.hours<7){date=previousDate(today);hour=17;}
+  else if(now.hours>17)hour=17;
 }
 
 int weekDay(int year, int month, int day) {
@@ -81,9 +107,14 @@ bool setRtcFromBuildTime(m5::rtc_date_t& date, m5::rtc_time_t& time) {
   return true;
 }
 
-uint32_t secondsUntilTomorrow(const m5::rtc_time_t& time) {
+uint32_t secondsUntilNextPrint(const m5::rtc_time_t& time) {
   const uint32_t elapsed = static_cast<uint32_t>(time.hours) * 3600u +
                            static_cast<uint32_t>(time.minutes) * 60u + time.seconds;
+  if (cadenceMode) {
+    if(time.hours<7)return 7u*3600u-elapsed+5u;
+    if(time.hours<17)return 3600u-(elapsed%3600u)+5u;
+    return 86400u-elapsed+7u*3600u+5u;
+  }
   return 86400u - elapsed + 5u;
 }
 
@@ -93,7 +124,7 @@ bool sameDate(const m5::rtc_date_t& a, const m5::rtc_date_t& b) {
 
 void showPrint(const m5::rtc_date_t& date, bool announceRecipe = false) {
   auto info = slow_draw::makePrintInfo(date.year, date.month, date.date, variant,
-                                       recipeMode);
+                                       recipeMode, cadenceMode ? displayedHour : -1);
   if (recipeMode != 0) info.system = selectedSystem();
   slow_draw::renderPrint(printCanvas, info);
   if (announceRecipe) {
@@ -114,11 +145,50 @@ void showPrint(const m5::rtc_date_t& date, bool announceRecipe = false) {
   }
 }
 
+void drawSettings() {
+  printCanvas.fillScreen(15);
+  auto button=[](int x,int y,int w,int h,const char* label,bool selected){
+    printCanvas.fillRoundRect(x,y,w,h,10,selected?2:15);
+    printCanvas.drawRoundRect(x,y,w,h,10,selected?2:7);
+    printCanvas.setTextColor(selected?15:0,selected?2:15);
+    printCanvas.setTextSize(2);printCanvas.setTextDatum(middle_center);
+    printCanvas.drawString(label,x+w/2,y+h/2);
+  };
+  printCanvas.setTextColor(0,15);printCanvas.setTextDatum(middle_center);printCanvas.setTextSize(3);
+  printCanvas.drawString("SLOW DRAW SETTINGS",slow_draw::kCanvasWidth/2,45);
+  printCanvas.setTextSize(2);printCanvas.setTextDatum(middle_left);printCanvas.drawString("NEW ARTWORK",50,95);
+  button(50,120,410,70,"DAILY",cadenceMode==0);button(500,120,410,70,"HOURLY",cadenceMode==1);
+  printCanvas.setTextColor(0,15);printCanvas.setTextDatum(middle_left);printCanvas.drawString("RECIPE",50,220);
+  static const char* labels[]={"ALL","CELLULAR","PIXEL FIELD","SUBDIVISION","DITHER","MURMURATION"};
+  for(int i=0;i<6;++i){const int col=i%3,row=i/3;button(50+col*300,245+row*82,270,62,labels[i],recipeMode==i);}
+  button(350,430,260,70,"DONE",false);
+  printCanvas.pushSprite(0,0);
+}
+
+void showSettings() {
+  drawSettings();const uint32_t started=millis();
+  while(M5.Touch.getCount()){M5.update();delay(10);}
+  while(millis()-started<60000u){
+    M5.update();
+    if(M5.Touch.getCount()){
+      const auto touch=M5.Touch.getDetail();
+      if(touch.wasClicked()){
+        const int x=touch.x,y=touch.y;
+        if(y>=120&&y<190){cadenceMode=x<480?0:1;saveCadenceMode();variant=0;currentPrintPeriod(M5.Rtc.getDate(),M5.Rtc.getTime(),displayedDate,displayedHour);saveVariant(displayedDate,displayedHour);drawSettings();}
+        else if(y>=245&&y<389&&x>=50&&x<920){const int col=(x-50)/300,row=(y-245)/82,index=row*3+col;if(index>=0&&index<6){recipeMode=index;saveRecipeMode();variant=0;saveVariant(displayedDate,displayedHour);drawSettings();}}
+        else if(y>=430&&y<510&&x>=350&&x<610)break;
+      }
+    }
+    delay(10);
+  }
+  showPrint(displayedDate);
+}
+
 void showSeed(uint32_t seed, uint32_t generatorVersion) {
   const auto info = slow_draw::makeSeedPrintInfo(seed, generatorVersion);
   slow_draw::renderPrint(printCanvas, info);
   printCanvas.pushSprite(0, 0);
-  Serial.printf("SDREADY SEED V%u:%08X\n", unsigned(generatorVersion), unsigned(seed));
+  Serial.printf("SDREADY SEED %02X%08X\n", unsigned(generatorVersion), unsigned(seed));
   Serial.flush();
   delay(1000);
 }
@@ -159,7 +229,7 @@ void processSerial() {
           Serial.printf("SDACCEPT VARIANT %lu\n", requested);
           Serial.flush();
           variant = static_cast<uint32_t>(requested);
-          saveVariant(displayedDate);
+          saveVariant(displayedDate, displayedHour);
           showPrint(displayedDate);
           Serial.printf("SDREADY VARIANT %u\n", unsigned(variant));
           Serial.flush();
@@ -169,9 +239,9 @@ void processSerial() {
       } else if (std::strncmp(serialLine, "SEED ", 5) == 0) {
         unsigned version = 0, requested = 0;
         char trailing = 0;
-        if (std::sscanf(serialLine + 5, "V%u:%8X%c", &version, &requested, &trailing) == 2 &&
+        if (std::sscanf(serialLine + 5, "%2X%8X%c", &version, &requested, &trailing) == 2 &&
             version == slow_draw::kGeneratorVersion) {
-          Serial.printf("SDACCEPT SEED V%u:%08X\n", version, requested);
+          Serial.printf("SDACCEPT SEED %02X%08X\n", version, requested);
           Serial.flush();
           showSeed(static_cast<uint32_t>(requested), version);
         }
@@ -185,16 +255,21 @@ void processSerial() {
   }
 }
 
-void sleepUntilPressOrTomorrow() {
+void sleepUntilInputOrNextPrint() {
   while (digitalRead(kRockerLeftPin) == LOW || digitalRead(kRockerPressPin) == LOW ||
-         digitalRead(kRockerRightPin) == LOW) delay(10);
+         digitalRead(kRockerRightPin) == LOW || digitalRead(kTouchWakePin) == LOW) {
+    // Reading the touch controller also clears its latched interrupt.
+    M5.update();
+    delay(10);
+  }
   const auto time = M5.Rtc.getTime();
   esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
   gpio_wakeup_enable(kRockerLeftPin, GPIO_INTR_LOW_LEVEL);
   gpio_wakeup_enable(kRockerPressPin, GPIO_INTR_LOW_LEVEL);
   gpio_wakeup_enable(kRockerRightPin, GPIO_INTR_LOW_LEVEL);
+  gpio_wakeup_enable(kTouchWakePin, GPIO_INTR_LOW_LEVEL);
   esp_sleep_enable_gpio_wakeup();
-  esp_sleep_enable_timer_wakeup(static_cast<uint64_t>(secondsUntilTomorrow(time)) * 1000000ULL);
+  esp_sleep_enable_timer_wakeup(static_cast<uint64_t>(secondsUntilNextPrint(time)) * 1000000ULL);
   uart_set_wakeup_threshold(UART_NUM_0, 3);
   esp_sleep_enable_uart_wakeup(UART_NUM_0);
   esp_light_sleep_start();
@@ -213,6 +288,7 @@ void setup() {
   pinMode(kRockerPressPin, INPUT);
   pinMode(kRockerLeftPin, INPUT);
   pinMode(kRockerRightPin, INPUT);
+  pinMode(kTouchWakePin, INPUT);
 
   auto date = M5.Rtc.getDate();
   auto time = M5.Rtc.getTime();
@@ -231,14 +307,16 @@ void setup() {
     return;
   }
 
-  displayedDate = date;
   recipeMode = preferences.getUChar("recipe", 0);
-  if (recipeMode > 4) recipeMode = 0;
-  if (preferences.getUInt("date", 0) == dateKey(displayedDate)) {
+  if (recipeMode > 5) recipeMode = 0;
+  cadenceMode = preferences.getUChar("cadence", 0);
+  if (cadenceMode > 1) cadenceMode = 0;
+  currentPrintPeriod(date, time, displayedDate, displayedHour);
+  if (preferences.getUInt("period", 0) == periodKey(displayedDate, displayedHour)) {
     variant = preferences.getUInt("variant", 0);
   } else {
     variant = 0;
-    saveVariant(displayedDate);
+    saveVariant(displayedDate, displayedHour);
   }
   showPrint(displayedDate);
   delay(250);
@@ -246,27 +324,35 @@ void setup() {
 
 void loop() {
   processSerial();
-  sleepUntilPressOrTomorrow();
+  sleepUntilInputOrNextPrint();
+  const bool touchWake = digitalRead(kTouchWakePin) == LOW;
   delay(50);
+  M5.update();
   processSerial();
 
   const auto today = M5.Rtc.getDate();
-  if (!sameDate(today, displayedDate)) {
-    displayedDate = today;
+  const auto now = M5.Rtc.getTime();
+  m5::rtc_date_t targetDate;uint8_t targetHour;
+  currentPrintPeriod(today,now,targetDate,targetHour);
+  if (!sameDate(targetDate, displayedDate) || (cadenceMode && targetHour != displayedHour)) {
+    displayedDate = targetDate;
+    displayedHour = targetHour;
     variant = 0;
-    saveVariant(displayedDate);
+    saveVariant(displayedDate, displayedHour);
     showPrint(displayedDate);
   } else if (digitalRead(kRockerLeftPin) == LOW) {
-    recipeMode = recipeMode == 0 ? 4 : recipeMode - 1;
+    recipeMode = recipeMode == 0 ? 5 : recipeMode - 1;
     saveRecipeMode();
     showPrint(displayedDate, true);
   } else if (digitalRead(kRockerRightPin) == LOW) {
-    recipeMode = recipeMode == 4 ? 0 : recipeMode + 1;
+    recipeMode = recipeMode == 5 ? 0 : recipeMode + 1;
     saveRecipeMode();
     showPrint(displayedDate, true);
   } else if (digitalRead(kRockerPressPin) == LOW) {
     ++variant;
-    saveVariant(displayedDate);
+    saveVariant(displayedDate, displayedHour);
     showPrint(displayedDate);
+  } else if (touchWake || M5.Touch.getCount()) {
+    showSettings();
   }
 }

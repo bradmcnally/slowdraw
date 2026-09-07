@@ -26,16 +26,19 @@ def block(a,x,y,w,h,v):
     for yy in range(max(0,y),min(H,y+h)):
         for xx in range(max(0,x),min(W,x+w)): put(a,xx,yy,v)
 def write_pgm(a,path):
+    height,width=len(a),len(a[0])
     with path.open("wb") as f:
-        f.write(f"P5\n{W} {H}\n255\n".encode())
+        f.write(f"P5\n{width} {height}\n255\n".encode())
         f.write(bytes(v*17 for row in a for v in row))
 
 def write_sheet(images,path):
-    scale,gap,cols,rows=2,8,5,10
-    sw=cols*W*scale+(cols+1)*gap; sh=rows*H*scale+(rows+1)*gap
+    image_h,image_w=len(images[0]),len(images[0][0])
+    scale=1 if image_w>W else 2
+    gap,cols,rows=8,5,10
+    sw=cols*image_w*scale+(cols+1)*gap; sh=rows*image_h*scale+(rows+1)*gap
     sheet=[[216 for _ in range(sw)] for _ in range(sh)]
     for i,a in enumerate(images):
-        ox=gap+(i%cols)*(W*scale+gap); oy=gap+(i//cols)*(H*scale+gap)
+        ox=gap+(i%cols)*(image_w*scale+gap); oy=gap+(i//cols)*(image_h*scale+gap)
         for y,row in enumerate(a):
             for x,v in enumerate(row):
                 value=v*17
@@ -312,6 +315,101 @@ def dither_pressure(seed, mode=None, pixel=1):
                     if 0<=sx<coarse_w and 0<=sy<coarse_h: coarse[sy][sx]=max(-8192,min(12288,coarse[sy][sx]+error))
     return a
 
+def murmuration(seed, diffusion=False, fine=False):
+    r=FirmwareRandom(seed); a=canvas(15); topology=r.range(0,5)
+    lobes=[]; cuts=[]
+    def lobe(x,y,rx,ry,angle=0,weight=1): lobes.append((x,y,rx,ry,angle,weight))
+    def cut(x,y,rx,ry,angle=0,weight=1): cuts.append((x,y,rx,ry,angle,weight))
+    cx,cy=r.range(82,159),r.range(43,78); flip=-1 if r.chance(.5) else 1
+    if topology==0:  # hooked comma, with a dense head and tapering tail
+        lobe(cx,cy,48,28,0,1.25); angle=-flip*(.35+r.unit()*.35)
+        for i in range(1,7):
+            angle+=flip*(.16+r.unit()*.17); length=27-i*3
+            x=cx+flip*i*25; y=cy+math.sin(angle)*i*17
+            lobe(x,y,max(9,length),max(5,length*.38),angle,.9)
+        cut(cx+flip*34,cy-flip*20,31,16,flip*.45,1.0)
+    elif topology==1:  # pinched hourglass / two masses about to separate
+        lobe(cx-flip*43,cy-r.range(-9,10),52,29,flip*.15,1.15)
+        lobe(cx+flip*43,cy+r.range(-13,14),48,25,-flip*.25,1.15)
+        lobe(cx,cy,29,9,0,.8); cut(cx,cy-r.range(15,27),35,18,0,.95); cut(cx,cy+r.range(15,27),35,18,0,.95)
+    elif topology==2:  # buckled fold: an imperfect cavity, sometimes nearly open
+        count=r.range(7,11); base=r.range(31,49); squash=.48+r.unit()*.25
+        phase=r.unit()*math.tau; missing=r.range(0,count) if r.chance(.45) else -1
+        for i in range(count):
+            if i==missing: continue
+            angle=phase+i*math.tau/count+(r.unit()-.5)*.24
+            radius=base*(.76+r.unit()*.42)+math.sin(angle*2+phase)*r.range(3,11)
+            thickness=.72+r.unit()*.55
+            x=cx+math.cos(angle)*radius; y=cy+math.sin(angle)*radius*squash
+            lobe(x,y,24*thickness,10+r.unit()*7,angle+math.pi/2,.82+r.unit()*.2)
+        # Off-centre overlapping cuts buckle the interior instead of stamping a circle.
+        cut(cx+r.range(-14,15),cy+r.range(-9,10),r.range(22,35),r.range(11,21),
+            (r.unit()-.5)*.7,1.35)
+        if r.chance(.55):
+            cut(cx+flip*r.range(15,30),cy-flip*r.range(7,20),r.range(13,24),r.range(7,15),flip*.55,1.0)
+        lobe(cx-flip*base*r.range(12,18)/10,cy+flip*r.range(15,34),r.range(26,45),r.range(8,16),flip*.35,.7)
+    elif topology==3:  # broad animal-like cloud with hanging tendrils
+        lobe(cx,cy-10,67,30,0,1.2); lobe(cx-flip*53,cy-3,43,22,flip*.2,1)
+        for i in range(r.range(2,5)):
+            x=cx+r.range(-62,63); length=r.range(25,61)
+            lobe(x,cy+length*.35,12,30,flip*(.2+r.unit()*.35),.78)
+            lobe(x+flip*r.range(8,19),cy+length*.75,8,20,flip*.45,.65)
+        cut(cx+flip*35,cy-22,27,14,flip*.2,.8)
+    else:  # collision: main body and one or two satellite flocks
+        lobe(cx-flip*24,cy,60,34,flip*.12,1.2); lobe(cx+flip*28,cy-flip*9,40,19,-flip*.3,.9)
+        cut(cx+flip*17,cy+flip*20,30,19,-flip*.3,.9)
+        sx=cx+flip*r.range(82,108); sy=cy+flip*r.range(-32,33)
+        lobe(sx,sy,r.range(16,27),r.range(8,15),flip*.3,.82)
+        if r.chance(.5): lobe(cx-flip*r.range(78,111),cy-flip*r.range(25,44),r.range(10,20),r.range(6,12),-flip*.4,.7)
+
+    def oval(x,y,item):
+        cx0,cy0,rx,ry,angle,weight=item; ca,sa=math.cos(angle),math.sin(angle)
+        dx=x-cx0; dy=y-cy0; u=dx*ca+dy*sa; v=-dx*sa+dy*ca
+        return weight*math.exp(-(u*u/(2*rx*rx)+v*v/(2*ry*ry)))
+    density=.62+r.unit()*.22; phase=r.unit()*math.tau
+    if diffusion:
+        resolution=2 if fine else 1
+        output_w,output_content_h=W*resolution,CONTENT_H*resolution
+        a=[[15 for _ in range(output_w)] for _ in range(H*resolution)]
+        values=[]
+        for y in range(output_content_h):
+            row=[]
+            for x in range(output_w):
+                sample_x,sample_y=x/resolution,y/resolution
+                field=sum(oval(sample_x,sample_y,item) for item in lobes)-sum(oval(sample_x,sample_y,item) for item in cuts)
+                # Convert flock density into a smooth ink pressure. The gentle
+                # edge becomes scattered pixels naturally during diffusion.
+                # Reserve solid black for only the most compressed core; most
+                # of the volume should remain visibly dithered.
+                darkness=max(0,min(.90,(field-.055)*.62))
+                row.append(lround((1-darkness)*4096))
+            values.append(row)
+        for y in range(output_content_h):
+            for x in range(output_w):
+                old=values[y][x]; quantized=4096 if old>=2048 else 0
+                a[y][x]=15 if quantized else 0; error=int((old-quantized)/8)
+                for sx,sy in ((x+1,y),(x+2,y),(x-1,y+1),(x,y+1),(x+1,y+1),(x,y+2)):
+                    if 0<=sx<output_w and 0<=sy<output_content_h:
+                        values[sy][sx]=max(-8192,min(12288,values[sy][sx]+error))
+        return a
+    for y in range(3,CONTENT_H-3,2):
+        for x in range(3,W-3,2):
+            positive=[oval(x,y,item) for item in lobes]; field=sum(positive)-sum(oval(x,y,item) for item in cuts)
+            probability=max(0,min(.96,(field-.16)*density))
+            if r.unit()>probability: continue
+            strongest=max(range(len(positive)),key=positive.__getitem__); flow=lobes[strongest][4]
+            flow+=.55*math.sin(x*.034+y*.051+phase)
+            tone=0 if field>.82 else (r.range(0,4) if field>.48 else r.range(3,9))
+            put(a,x,y,tone)
+            # Predominantly isolated marks prevent neighboring strokes from
+            # joining into maze-like horizontal corridors.
+            if r.chance(.18):
+                dx=1 if math.cos(flow)>=0 else -1
+                dy=1 if math.sin(flow)>=0 else -1
+                put(a,x+dx,y+dy,tone)
+            if field>.9 and r.chance(.10): put(a,x,y+1,r.range(0,3))
+    return a
+
 SYSTEMS={
     "scanline-erosion":scanline_erosion,
     "motif-field":motif_field,
@@ -329,6 +427,9 @@ SYSTEMS={
     "dither-pressure-ordered":lambda seed: dither_pressure(seed,0),
     "dither-pressure-diffusion":lambda seed: dither_pressure(seed,1),
     "dither-pressure":lambda seed: dither_pressure(seed),
+    "murmuration":murmuration,
+    "murmuration-diffusion":lambda seed: murmuration(seed,True),
+    "murmuration-diffusion-half-pixels":lambda seed: murmuration(seed,True,True),
     "dither-pressure-ordered-large":lambda seed: dither_pressure(seed,0,4),
     "dither-pressure-diffusion-large":lambda seed: dither_pressure(seed,1,4),
 }

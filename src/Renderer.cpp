@@ -186,6 +186,52 @@ void ditherPressure(Random&r){
     }
   }
 }
+void murmuration(Random&r){
+  clear(LIGHT);
+  struct Oval{float x,y,rx,ry,angle,weight;};
+  Oval lobes[16],cuts[3];int lobeCount=0,cutCount=0;
+  auto add=[&](Oval* list,int& count,float x,float y,float rx,float ry,float angle,float weight){
+    list[count++]={x,y,rx,ry,angle,weight};
+  };
+  auto lobe=[&](float x,float y,float rx,float ry,float angle=0,float weight=1){add(lobes,lobeCount,x,y,rx,ry,angle,weight);};
+  auto cut=[&](float x,float y,float rx,float ry,float angle=0,float weight=1){add(cuts,cutCount,x,y,rx,ry,angle,weight);};
+  const int topology=r.range(0,5);const float cx=r.range(82,159),cy=r.range(43,78);const int flip=r.chance(.5f)?-1:1;
+  if(topology==0){
+    lobe(cx,cy,48,28,0,1.25f);float angle=-flip*(.35f+r.unit()*.35f);
+    for(int i=1;i<7;++i){angle+=flip*(.16f+r.unit()*.17f);const float length=27-i*3;lobe(cx+flip*i*25,cy+sinf(angle)*i*17,std::max(9.0f,length),std::max(5.0f,length*.38f),angle,.9f);}
+    cut(cx+flip*34,cy-flip*20,31,16,flip*.45f,1);
+  }else if(topology==1){
+    lobe(cx-flip*43,cy-r.range(-9,10),52,29,flip*.15f,1.15f);lobe(cx+flip*43,cy+r.range(-13,14),48,25,-flip*.25f,1.15f);lobe(cx,cy,29,9,0,.8f);
+    cut(cx,cy-r.range(15,27),35,18,0,.95f);cut(cx,cy+r.range(15,27),35,18,0,.95f);
+  }else if(topology==2){
+    const int count=r.range(7,11),base=r.range(31,49);const float squash=.48f+r.unit()*.25f,phase=r.unit()*6.2831853f;const int missing=r.chance(.45f)?r.range(0,count):-1;
+    for(int i=0;i<count;++i){if(i==missing)continue;const float angle=phase+i*6.2831853f/count+(r.unit()-.5f)*.24f;const float radius=base*(.76f+r.unit()*.42f)+sinf(angle*2+phase)*r.range(3,11),thickness=.72f+r.unit()*.55f;lobe(cx+cosf(angle)*radius,cy+sinf(angle)*radius*squash,24*thickness,10+r.unit()*7,angle+1.5707963f,.82f+r.unit()*.2f);}
+    cut(cx+r.range(-14,15),cy+r.range(-9,10),r.range(22,35),r.range(11,21),(r.unit()-.5f)*.7f,1.35f);
+    if(r.chance(.55f))cut(cx+flip*r.range(15,30),cy-flip*r.range(7,20),r.range(13,24),r.range(7,15),flip*.55f,1);
+    lobe(cx-flip*base*r.range(12,18)/10.0f,cy+flip*r.range(15,34),r.range(26,45),r.range(8,16),flip*.35f,.7f);
+  }else if(topology==3){
+    lobe(cx,cy-10,67,30,0,1.2f);lobe(cx-flip*53,cy-3,43,22,flip*.2f,1);
+    const int tendrils=r.range(2,5);for(int i=0;i<tendrils;++i){const float x=cx+r.range(-62,63),length=r.range(25,61);lobe(x,cy+length*.35f,12,30,flip*(.2f+r.unit()*.35f),.78f);lobe(x+flip*r.range(8,19),cy+length*.75f,8,20,flip*.45f,.65f);}
+    cut(cx+flip*35,cy-22,27,14,flip*.2f,.8f);
+  }else{
+    lobe(cx-flip*24,cy,60,34,flip*.12f,1.2f);lobe(cx+flip*28,cy-flip*9,40,19,-flip*.3f,.9f);cut(cx+flip*17,cy+flip*20,30,19,-flip*.3f,.9f);
+    lobe(cx+flip*r.range(82,108),cy+flip*r.range(-32,33),r.range(16,27),r.range(8,15),flip*.3f,.82f);
+    if(r.chance(.5f))lobe(cx-flip*r.range(78,111),cy-flip*r.range(25,44),r.range(10,20),r.range(6,12),-flip*.4f,.7f);
+  }
+  auto oval=[](int x,int y,const Oval&o){const float ca=cosf(o.angle),sa=sinf(o.angle),dx=x-o.x,dy=y-o.y,u=dx*ca+dy*sa,v=-dx*sa+dy*ca;return o.weight*expf(-(u*u/(2*o.rx*o.rx)+v*v/(2*o.ry*o.ry)));};
+  // Translate the flock volume into ink pressure, reserving solid black for
+  // only its most compressed core. Atkinson diffusion dissolves the boundary.
+  for(int y=0;y<GRID_CONTENT_H;++y)for(int x=0;x<GW;++x){
+    float field=0;for(int i=0;i<lobeCount;++i)field+=oval(x,y,lobes[i]);for(int i=0;i<cutCount;++i)field-=oval(x,y,cuts[i]);
+    const float darkness=std::max(0.0f,std::min(.90f,(field-.055f)*.62f));
+    pressure[y*GW+x]=static_cast<int16_t>(lroundf((1.0f-darkness)*4096.0f));
+  }
+  for(int y=0;y<GRID_CONTENT_H;++y)for(int x=0;x<GW;++x){
+    const int index=y*GW+x,old=pressure[index],quantized=old>=2048?4096:0;dot(x,y,quantized?LIGHT:DARK);const int error=(old-quantized)/8;
+    auto spread=[&](int sx,int sy){if(sx>=0&&sx<GW&&sy>=0&&sy<GRID_CONTENT_H){const int target=pressure[sy*GW+sx]+error;pressure[sy*GW+sx]=static_cast<int16_t>(std::max(-8192,std::min(12288,target)));}};
+    spread(x+1,y);spread(x+2,y);spread(x-1,y+1);spread(x,y+1);spread(x+1,y+1);spread(x,y+2);
+  }
+}
 void mirroredLattice(Random&r){
   clear(LIGHT);
   const int unit=PIXEL_SIZES[r.range(0,6)];
@@ -259,8 +305,9 @@ uint16_t gray(uint8_t l){uint8_t v=l*17;return uint16_t(((v&0xF8)<<8)|((v&0xFC)<
 void paint(M5Canvas&c){c.fillScreen(gray(LIGHT));for(int y=0;y<GH;++y)for(int x=0;x<GW;++x)c.fillRect(x*SCALE,y*SCALE,SCALE,SCALE,gray(get(x,y)));}
 } // namespace
 
-PrintInfo makePrintInfo(int year,int month,int day,uint32_t variant,uint8_t recipeMode){PrintInfo i{};i.generatorVersion=kGeneratorVersion;uint32_t base=dateSeed(year,month,day,kGeneratorVersion);uint32_t raw=variant?mix32(base^mix32(variant*0x9e3779b9u)):base;if(recipeMode)raw=mix32(raw^mix32(uint32_t(recipeMode)*0x6d2b79f5u));const uint32_t pick=recipeMode?uint32_t(recipeMode-1):mix32(raw^0x51f15e5du)%4u;i.system=pick==0?System::CellularAggregate:(pick==1?System::PixelField:(pick==2?System::Subdivision:System::DitherPressure));i.seed=(raw&0x3fffffffu)|(pick<<30);std::snprintf(i.identity,sizeof(i.identity),"SLOW DRAW  %04d.%02d.%02d/%u",year,month,day,unsigned(variant));return i;}
-PrintInfo makeSeedPrintInfo(uint32_t seed,uint32_t generatorVersion){PrintInfo i{};i.seed=seed;i.generatorVersion=generatorVersion;const uint32_t pick=seed>>30;i.system=pick==0?System::CellularAggregate:(pick==1?System::PixelField:(pick==2?System::Subdivision:System::DitherPressure));std::snprintf(i.identity,sizeof(i.identity),"SLOW DRAW  REPLAY");return i;}
-const char* systemName(System s){if(s==System::CellularAggregate)return "CELLULAR AGGREGATE";if(s==System::PixelField)return "PIXEL FIELD";if(s==System::Subdivision)return "SUBDIVISION";if(s==System::DitherPressure)return "DITHER PRESSURE";return "MIRRORED LATTICE";}
-void renderPrint(M5Canvas&c,const PrintInfo&i){Random r(i.seed);if(i.system==System::CellularAggregate)cellular(r);else if(i.system==System::PixelField)pixelField(r);else if(i.system==System::Subdivision)subdivision(r);else if(i.system==System::DitherPressure)ditherPressure(r);else mirroredLattice(r);paint(c);c.fillRect(0,GRID_CONTENT_H*SCALE,kCanvasWidth,kCanvasHeight-GRID_CONTENT_H*SCALE,gray(LIGHT));c.setTextColor(gray(DARK),gray(LIGHT));c.setTextSize(2);const int labelY=(GRID_CONTENT_H*SCALE+kCanvasHeight)/2;const char* dateLabel=i.identity+11;char printLabel[48];std::snprintf(printLabel,sizeof(printLabel),"%s  V%u:%08X",dateLabel,unsigned(i.generatorVersion),unsigned(i.seed));c.setTextDatum(middle_left);c.drawString("SLOW DRAW",24,labelY);c.setTextDatum(middle_right);c.drawString(printLabel,kCanvasWidth-24,labelY);}
+System pickSystem(uint32_t pick){if(pick==0)return System::CellularAggregate;if(pick==1)return System::PixelField;if(pick==2)return System::Subdivision;if(pick==3)return System::DitherPressure;return System::Murmuration;}
+PrintInfo makePrintInfo(int year,int month,int day,uint32_t variant,uint8_t recipeMode,int hourSlot){PrintInfo i{};i.generatorVersion=kGeneratorVersion;uint32_t base=dateSeed(year,month,day,kGeneratorVersion);if(hourSlot>=0)base=mix32(base^mix32(uint32_t(hourSlot+1)*0x85ebca6bu));uint32_t raw=variant?mix32(base^mix32(variant*0x9e3779b9u)):base;if(recipeMode)raw=mix32(raw^mix32(uint32_t(recipeMode)*0x6d2b79f5u));const uint32_t pick=recipeMode?uint32_t(recipeMode-1):mix32(raw^0x51f15e5du)%5u;i.system=pickSystem(pick);i.seed=(raw&0x1fffffffu)|(pick<<29);std::snprintf(i.identity,sizeof(i.identity),"SLOW DRAW  %04d.%02d.%02d",year,month,day);return i;}
+PrintInfo makeSeedPrintInfo(uint32_t seed,uint32_t generatorVersion){PrintInfo i{};i.seed=seed;i.generatorVersion=generatorVersion;i.system=pickSystem(std::min(4u,seed>>29));std::snprintf(i.identity,sizeof(i.identity),"SLOW DRAW  REPLAY");return i;}
+const char* systemName(System s){if(s==System::CellularAggregate)return "CELLULAR AGGREGATE";if(s==System::PixelField)return "PIXEL FIELD";if(s==System::Subdivision)return "SUBDIVISION";if(s==System::DitherPressure)return "DITHER PRESSURE";if(s==System::Murmuration)return "MURMURATION";return "MIRRORED LATTICE";}
+void renderPrint(M5Canvas&c,const PrintInfo&i){Random r(i.seed);if(i.system==System::CellularAggregate)cellular(r);else if(i.system==System::PixelField)pixelField(r);else if(i.system==System::Subdivision)subdivision(r);else if(i.system==System::DitherPressure)ditherPressure(r);else if(i.system==System::Murmuration)murmuration(r);else mirroredLattice(r);paint(c);c.fillRect(0,GRID_CONTENT_H*SCALE,kCanvasWidth,kCanvasHeight-GRID_CONTENT_H*SCALE,gray(LIGHT));c.setTextColor(gray(DARK),gray(LIGHT));c.setTextSize(2);const int labelY=(GRID_CONTENT_H*SCALE+kCanvasHeight)/2;const char* dateLabel=i.identity+11;char printLabel[48];std::snprintf(printLabel,sizeof(printLabel),"%s  %02X%08X",dateLabel,unsigned(i.generatorVersion),unsigned(i.seed));c.setTextDatum(middle_left);c.drawString("SLOW DRAW",24,labelY);c.setTextDatum(middle_right);c.drawString(printLabel,kCanvasWidth-24,labelY);}
 } // namespace slow_draw

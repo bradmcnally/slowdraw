@@ -66,10 +66,18 @@ The display is targeted at 960 × 540 in landscape orientation. Generator output
 is deterministic for `(date, variant, generator version, recipe mode)`. The
 recipe mode is folded into the full 32-bit seed, so the same date and variant
 have distinct seeds in each locked recipe. `ALL` preserves the original seed
-sequence. The seed's top two bits encode the actual recipe. The footer displays
-a versioned replay identity such as `V14:E92B7DE2`; both parts are required so
+sequence. The seed's top three bits encode the actual recipe. The footer displays
+a single replay code such as `0FE92B7DE2`: the first two hexadecimal digits
+encode generator version 15 and the remaining eight digits are the seed. Both are required so
 a future generator cannot silently reinterpret an older seed. Changing
 `kGeneratorVersion` intentionally starts a new sequence.
+
+Tap the artwork to open the settings screen. `NEW ARTWORK` selects a daily or
+hourly deterministic cadence, and `RECIPE` selects `ALL` or a specific visual
+system. Both choices are saved across restarts. The rocker continues to change
+the saved recipe directly; pressing it creates another variant for the current
+day or hour. Hourly prints run only during desk hours: 7:00 through 17:00. The
+17:00 print remains on screen overnight until the next 7:00 print.
 
 ## Framebuffer capture
 
@@ -91,7 +99,7 @@ To temporarily recreate and capture an artwork from its complete displayed
 seed, without changing the RTC or saved current print:
 
 ```sh
-./tools/capture.py --seed V14:E92B7DE2
+./tools/capture.py --seed 0FE92B7DE2
 ```
 
 Replay identities from unsupported generator versions are rejected rather than

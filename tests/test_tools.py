@@ -29,10 +29,10 @@ class CaptureValidationTests(unittest.TestCase):
                 capture.parse_variant(value)
 
     def test_accepts_complete_versioned_seed(self):
-        self.assertEqual(capture.parse_seed_identity("V14:e92b7de2"), (14, 0xE92B7DE2))
+        self.assertEqual(capture.parse_seed_identity("0fe92b7de2"), (15, 0xE92B7DE2))
 
     def test_rejects_incomplete_or_wrong_version_seed(self):
-        for value in ("E92B7DE2", "V14:7DE2", "V13:E92B7DE2", "V14:100000000"):
+        for value in ("E92B7DE2", "0F7DE2", "0EE92B7DE2", "0F100000000"):
             with self.subTest(value=value), self.assertRaises(argparse.ArgumentTypeError):
                 capture.parse_seed_identity(value)
 

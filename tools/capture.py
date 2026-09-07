@@ -19,7 +19,7 @@ PORT_PATTERNS = (
     "/dev/ttyUSB*",
     "/dev/ttyACM*",
 )
-CURRENT_GENERATOR_VERSION = 14
+CURRENT_GENERATOR_VERSION = 15
 
 
 def find_port():
@@ -93,7 +93,7 @@ def request_variant(fd, variant):
 
 
 def request_seed(fd, version, seed):
-    identity = f"V{version}:{seed:08X}"
+    identity = f"{version:02X}{seed:08X}"
     request_command(fd, f"SEED {identity}\n".encode(), f"SDREADY SEED {identity}".encode())
 
 
@@ -108,13 +108,13 @@ def parse_variant(value):
 
 
 def parse_seed_identity(value):
-    match = re.fullmatch(r"V([0-9]+):([0-9A-Fa-f]{8})", value)
+    match = re.fullmatch(r"([0-9A-Fa-f]{2})([0-9A-Fa-f]{8})", value)
     if not match:
-        raise argparse.ArgumentTypeError(f"seed must use the displayed form V{CURRENT_GENERATOR_VERSION}:89ABCDEF")
-    version = int(match.group(1), 10)
+        raise argparse.ArgumentTypeError(f"seed must use the displayed 10-character form {CURRENT_GENERATOR_VERSION:02X}89ABCDEF")
+    version = int(match.group(1), 16)
     if version != CURRENT_GENERATOR_VERSION:
         raise argparse.ArgumentTypeError(
-            f"this firmware currently supports replay version V{CURRENT_GENERATOR_VERSION}"
+            f"this firmware currently supports replay codes beginning with {CURRENT_GENERATOR_VERSION:02X}"
         )
     return version, int(match.group(2), 16)
 
