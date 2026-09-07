@@ -46,7 +46,16 @@ slow_draw::System selectedSystem() {
 }
 
 bool validDate(const m5::rtc_date_t& date) {
-  return date.year >= 2024 && date.year <= 2099 && date.month >= 1 && date.month <= 12 && date.date >= 1 && date.date <= 31;
+  if (date.year < 2024 || date.year > 2099 || date.month < 1 || date.month > 12) return false;
+  static const uint8_t days[] = {31,28,31,30,31,30,31,31,30,31,30,31};
+  uint8_t maximum = days[date.month - 1];
+  const bool leap = (date.year % 4 == 0 && date.year % 100 != 0) || date.year % 400 == 0;
+  if (date.month == 2 && leap) maximum = 29;
+  return date.date >= 1 && date.date <= maximum;
+}
+
+bool validTime(const m5::rtc_time_t& time) {
+  return time.hours < 24 && time.minutes < 60 && time.seconds < 60;
 }
 
 int weekDay(int year, int month, int day) {
@@ -105,11 +114,11 @@ void showPrint(const m5::rtc_date_t& date, bool announceRecipe = false) {
   }
 }
 
-void showSeed(uint32_t seed) {
-  const auto info = slow_draw::makeSeedPrintInfo(seed);
+void showSeed(uint32_t seed, uint32_t generatorVersion) {
+  const auto info = slow_draw::makeSeedPrintInfo(seed, generatorVersion);
   slow_draw::renderPrint(printCanvas, info);
   printCanvas.pushSprite(0, 0);
-  Serial.printf("SDSEED %08X\n", unsigned(seed));
+  Serial.printf("SDREADY SEED V%u:%08X\n", unsigned(generatorVersion), unsigned(seed));
   Serial.flush();
   delay(1000);
 }
@@ -147,19 +156,24 @@ void processSerial() {
         char* end = nullptr;
         const unsigned long requested = std::strtoul(serialLine + 8, &end, 10);
         if (end != serialLine + 8 && *end == '\0') {
+          Serial.printf("SDACCEPT VARIANT %lu\n", requested);
+          Serial.flush();
           variant = static_cast<uint32_t>(requested);
           saveVariant(displayedDate);
           showPrint(displayedDate);
-          Serial.printf("SDVARIANT %u\n", unsigned(variant));
+          Serial.printf("SDREADY VARIANT %u\n", unsigned(variant));
           Serial.flush();
           // Keep the command window open for the capture request that follows.
           delay(1000);
         }
       } else if (std::strncmp(serialLine, "SEED ", 5) == 0) {
-        char* end = nullptr;
-        const unsigned long requested = std::strtoul(serialLine + 5, &end, 16);
-        if (end != serialLine + 5 && *end == '\0') {
-          showSeed(static_cast<uint32_t>(requested));
+        unsigned version = 0, requested = 0;
+        char trailing = 0;
+        if (std::sscanf(serialLine + 5, "V%u:%8X%c", &version, &requested, &trailing) == 2 &&
+            version == slow_draw::kGeneratorVersion) {
+          Serial.printf("SDACCEPT SEED V%u:%08X\n", version, requested);
+          Serial.flush();
+          showSeed(static_cast<uint32_t>(requested), version);
         }
       }
       serialLineLength = 0;
@@ -202,7 +216,7 @@ void setup() {
 
   auto date = M5.Rtc.getDate();
   auto time = M5.Rtc.getTime();
-  if (!validDate(date)) setRtcFromBuildTime(date, time);
+  if (!validDate(date) || !validTime(time)) setRtcFromBuildTime(date, time);
 
   printCanvas.setPsram(true);
   printCanvas.setColorDepth(4);

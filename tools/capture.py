@@ -9,6 +9,7 @@ import struct
 import termios
 import time
 import zlib
+import re
 
 
 PORT_PATTERNS = (
@@ -18,6 +19,7 @@ PORT_PATTERNS = (
     "/dev/ttyUSB*",
     "/dev/ttyACM*",
 )
+CURRENT_GENERATOR_VERSION = 14
 
 
 def find_port():
@@ -76,34 +78,45 @@ def request_frame(fd, timeout):
     return bytes(data)
 
 
-def request_variant(fd, variant, timeout=30):
+def request_command(fd, command, ready_marker, timeout=90):
     data = bytearray()
     deadline = time.monotonic() + timeout
-    next_request = time.monotonic()
-    marker = f"SDVARIANT {variant}".encode()
-    command = f"VARIANT {variant}\n".encode()
-    while marker not in data:
+    os.write(fd, command)
+    while ready_marker not in data:
         if time.monotonic() > deadline:
-            raise SystemExit("The device did not confirm the requested variant.")
-        if time.monotonic() >= next_request:
-            os.write(fd, command)
-            next_request = time.monotonic() + 8.0
+            raise SystemExit("The device did not finish the requested render.")
         data.extend(read_some(fd))
 
 
-def request_seed(fd, seed, timeout=30):
-    data = bytearray()
-    deadline = time.monotonic() + timeout
-    next_request = time.monotonic()
-    marker = f"SDSEED {seed:08X}".encode()
-    command = f"SEED {seed:08X}\n".encode()
-    while marker not in data:
-        if time.monotonic() > deadline:
-            raise SystemExit("The device did not confirm the requested seed.")
-        if time.monotonic() >= next_request:
-            os.write(fd, command)
-            next_request = time.monotonic() + 8.0
-        data.extend(read_some(fd))
+def request_variant(fd, variant):
+    request_command(fd, f"VARIANT {variant}\n".encode(), f"SDREADY VARIANT {variant}".encode())
+
+
+def request_seed(fd, version, seed):
+    identity = f"V{version}:{seed:08X}"
+    request_command(fd, f"SEED {identity}\n".encode(), f"SDREADY SEED {identity}".encode())
+
+
+def parse_variant(value):
+    try:
+        variant = int(value, 10)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("variant must be an unsigned decimal integer") from error
+    if not 0 <= variant <= 0xFFFFFFFF:
+        raise argparse.ArgumentTypeError("variant must be between 0 and 4294967295")
+    return variant
+
+
+def parse_seed_identity(value):
+    match = re.fullmatch(r"V([0-9]+):([0-9A-Fa-f]{8})", value)
+    if not match:
+        raise argparse.ArgumentTypeError(f"seed must use the displayed form V{CURRENT_GENERATOR_VERSION}:89ABCDEF")
+    version = int(match.group(1), 10)
+    if version != CURRENT_GENERATOR_VERSION:
+        raise argparse.ArgumentTypeError(
+            f"this firmware currently supports replay version V{CURRENT_GENERATOR_VERSION}"
+        )
+    return version, int(match.group(2), 16)
 
 
 def read_exact(fd, initial, count, timeout=120):
@@ -151,8 +164,8 @@ def main():
     parser.add_argument("output", nargs="?")
     parser.add_argument("--port")
     parser.add_argument("--no-reset", action="store_true", help="try capturing without resetting the sleeping device")
-    parser.add_argument("--variant", type=int, help="render and select this same-day variant before capture")
-    parser.add_argument("--seed", type=lambda value: int(value, 16), help="temporarily recreate an eight-digit hexadecimal seed")
+    parser.add_argument("--variant", type=parse_variant, help="render and select this same-day variant before capture")
+    parser.add_argument("--seed", type=parse_seed_identity, help="temporarily recreate a displayed versioned seed")
     args = parser.parse_args()
     if args.variant is not None and args.seed is not None:
         parser.error("--variant and --seed cannot be used together")
@@ -168,7 +181,7 @@ def main():
         if args.variant is not None:
             request_variant(fd, args.variant)
         elif args.seed is not None:
-            request_seed(fd, args.seed)
+            request_seed(fd, *args.seed)
         response = request_frame(fd, 20)
         header_start = response.index(b"SDFRAME ")
         while b"\n" not in response[header_start:]:

@@ -5,10 +5,21 @@ from pathlib import Path
 import argparse, math, random, subprocess
 
 W, H = 240, 124
+CONTENT_H = 120
+PIXEL_SIZES = (8,10,10,10,10,12)
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "outputs" / "studies"
 
 def canvas(value=15): return [[value for _ in range(W)] for _ in range(H)]
+class FirmwareRandom:
+    def __init__(self, seed): self.state=seed&0xffffffff or 0x6d2b79f5
+    def next(self):
+        x=self.state; x^=(x<<13)&0xffffffff; x^=x>>17; x^=(x<<5)&0xffffffff
+        self.state=x&0xffffffff; return self.state
+    def range(self, low, high): return low+self.next()%(high-low)
+    def unit(self): return (self.next()>>8)*(1.0/16777216.0)
+    def chance(self, probability): return self.unit()<probability
+def lround(value): return math.floor(value+.5) if value>=0 else math.ceil(value-.5)
 def put(a,x,y,v):
     if 0 <= x < W and 0 <= y < H: a[y][x] = max(0,min(15,int(v)))
 def block(a,x,y,w,h,v):
@@ -91,37 +102,157 @@ def dither_architecture(seed):
                 put(a,xx,yy,hi if bayer[yy&3][xx&3] < (tone&3)*4 else lo)
     return a
 
-def cellular_aggregate(seed):
-    r=random.Random(seed); a=canvas(r.choice([14,15])); unit=r.choice([5,6,8,10]); x=r.randrange(7,W//unit-7); y=r.randrange(5,H//unit-5)
-    cells={(x,y)}
-    for _ in range(r.randint(45,100)):
-        bx,by=r.choice(tuple(cells)); dx,dy=r.choice(((1,0),(-1,0),(0,1),(0,-1),(1,1),(-1,-1)))
+def single_cellular(r):
+    a=canvas(15); unit=PIXEL_SIZES[r.range(0,6)]; cols=W//unit; rows=CONTENT_H//unit
+    cells=[(r.range(7,max(8,cols-7)),r.range(5,max(6,rows-5)))]
+    directions=((1,0),(-1,0),(0,1),(0,-1),(1,1),(-1,-1))
+    for _ in range(r.range(110,221)):
+        bx,by=cells[r.range(0,len(cells))]; dx,dy=directions[r.range(0,6)]
         nx,ny=bx+dx,by+dy
-        if 1<=nx<W//unit-1 and 1<=ny<H//unit-1: cells.add((nx,ny))
-    # Value comes from position within the aggregate, not independent randomness.
+        if 1<=nx<cols-1 and 1<=ny<rows-1 and (nx,ny) not in cells: cells.append((nx,ny))
     cx=sum(x for x,y in cells)/len(cells); cy=sum(y for x,y in cells)/len(cells)
     for x,y in cells:
         angle=math.atan2(y-cy,x-cx); radius=math.hypot(x-cx,y-cy)
-        value=max(0,min(14,round(7+5*math.sin(angle*2.3+radius*.7))))
-        gap=r.choice([0,0,1]); block(a,x*unit+gap,y*unit+gap,unit-gap,unit-gap,value)
-    # A few detached echoes preserve negative space.
-    for _ in range(r.randint(3,9)):
-        x,y=r.choice(tuple(cells)); x+=r.choice((-3,3)); y+=r.choice((-3,3))
-        block(a,x*unit,y*unit,unit,unit,r.randrange(3,13))
+        value=max(0,min(14,lround(7+5*math.sin(angle*2.3+radius*.7))))
+        block(a,x*unit,y*unit,unit,unit,value)
+    for _ in range(r.range(3,9)):
+        x,y=cells[r.range(0,len(cells))]; x+=-3 if r.chance(.5) else 3; y+=-3 if r.chance(.5) else 3
+        if 0<=x<cols and 0<=y<rows: block(a,x*unit,y*unit,unit,unit,r.range(3,13))
     return a
 
-def subdivision(seed, language):
-    r=random.Random(seed); a=canvas(15); macro=r.choice([8,10,10,10,10,12]); sub=2
-    cols,rows,cells=W//macro,120//macro,macro//sub
-    centers=[(r.randrange(cols),r.randrange(rows),r.uniform(3,8),r.choice([-1,1])) for _ in range(r.randint(3,5))]
-    phase=r.randrange(6); dark=r.randrange(0,5); mid=r.randrange(7,13)
+def cellular_aggregate(seed):
+    r=FirmwareRandom(seed)
+    return dual_cellular_attractor(rng=r) if r.chance(.30) else single_cellular(r)
+
+def dual_cellular(seed, interaction):
+    r=FirmwareRandom(seed); a=canvas(15); unit=PIXEL_SIZES[r.range(0,6)]
+    cols,rows=W//unit,CONTENT_H//unit
+    margin_x=max(3,cols//6); margin_y=max(3,rows//5)
+    cells=[[(r.range(margin_x,max(margin_x+1,cols//2-1)),r.range(margin_y,rows-margin_y))],
+           [(r.range(cols//2+1,cols-margin_x),r.range(margin_y,rows-margin_y))]]
+    directions=((1,0),(-1,0),(0,1),(0,-1),(1,1),(-1,-1))
+    steps=r.range(150,261)
+    for step in range(steps):
+        owner=step&1; other=1-owner
+        bx,by=cells[owner][r.range(0,len(cells[owner]))]
+        dx,dy=directions[r.range(0,6)]; candidate=(bx+dx,by+dy)
+        if not (1<=candidate[0]<cols-1 and 1<=candidate[1]<rows-1): continue
+        if candidate in cells[owner]: continue
+        if interaction=="boundary" and candidate in cells[other]: continue
+        cells[owner].append(candidate)
+    centers=[]
+    for group in cells:
+        centers.append((sum(x for x,y in group)/len(group),sum(y for x,y in group)/len(group)))
+    occupancy={}
+    for owner,group in enumerate(cells):
+        cx,cy=centers[owner]
+        for x,y in group:
+            angle=math.atan2(y-cy,x-cx); radius=math.hypot(x-cx,y-cy)
+            shade=max(1,min(13,lround(7+5*math.sin(angle*2.3+radius*.7+owner*1.7))))
+            if (x,y) in occupancy:
+                occupancy[(x,y)]=max(0,min(3,min(occupancy[(x,y)],shade)-2))
+            else:
+                occupancy[(x,y)]=shade
+    if interaction=="boundary":
+        left=set(cells[0]); right=set(cells[1])
+        for x,y in left:
+            if any((x+dx,y+dy) in right for dx,dy in directions[:4]): occupancy[(x,y)]=1
+        for x,y in right:
+            if any((x+dx,y+dy) in left for dx,dy in directions[:4]): occupancy[(x,y)]=1
+    for (x,y),shade in occupancy.items(): block(a,x*unit,y*unit,unit,unit,shade)
+    for owner in range(2):
+        for _ in range(r.range(2,5)):
+            x,y=cells[owner][r.range(0,len(cells[owner]))]
+            x+=-3 if r.chance(.5) else 3; y+=-3 if r.chance(.5) else 3
+            if 0<=x<cols and 0<=y<rows and (x,y) not in occupancy:
+                block(a,x*unit,y*unit,unit,unit,r.range(4,12))
+    return a
+
+def dual_cellular_attractor(seed=None, rng=None):
+    r=rng if rng is not None else FirmwareRandom(seed); a=canvas(15); unit=PIXEL_SIZES[r.range(0,6)]
+    cols,rows=W//unit,CONTENT_H//unit
+    attractor=(r.range(cols//3,cols-cols//3),r.range(rows//3,rows-rows//3))
+    vertical=r.chance(.35)
+    if vertical:
+        starts=[(r.range(3,cols-3),r.range(1,max(2,rows//4))),
+                (r.range(3,cols-3),r.range(rows-rows//4,rows-1))]
+    else:
+        starts=[(r.range(1,max(2,cols//4)),r.range(3,rows-3)),
+                (r.range(cols-cols//4,cols-1),r.range(3,rows-3))]
+    groups=[[starts[0]],[starts[1]]]; occupied=[{starts[0]},{starts[1]}]
+    directions=((1,0),(-1,0),(0,1),(0,-1),(1,1),(-1,-1))
+    touched=False
+    for step in range(r.range(210,321)):
+        owner=step&1; other=1-owner
+        if not touched and r.chance(.72):
+            sample=[groups[owner][r.range(0,len(groups[owner]))] for _ in range(min(8,len(groups[owner])))]
+            bx,by=min(sample,key=lambda cell:(cell[0]-attractor[0])**2+(cell[1]-attractor[1])**2)
+            candidates=[]
+            for dx,dy in directions:
+                nx,ny=bx+dx,by+dy
+                if 1<=nx<cols-1 and 1<=ny<rows-1 and (nx,ny) not in occupied[owner]:
+                    score=(nx-attractor[0])**2+(ny-attractor[1])**2+r.unit()*8
+                    candidates.append((score,(nx,ny)))
+            if not candidates: continue
+            candidate=min(candidates)[1]
+        else:
+            bx,by=groups[owner][r.range(0,len(groups[owner]))]
+            dx,dy=directions[r.range(0,6)]; candidate=(bx+dx,by+dy)
+            if not (1<=candidate[0]<cols-1 and 1<=candidate[1]<rows-1): continue
+            if candidate in occupied[owner]: continue
+        if candidate in occupied[other]:
+            touched=True
+            continue
+        groups[owner].append(candidate); occupied[owner].add(candidate)
+        if any((candidate[0]+dx,candidate[1]+dy) in occupied[other] for dx,dy in directions[:4]):
+            touched=True
+    centers=[(sum(x for x,y in group)/len(group),sum(y for x,y in group)/len(group)) for group in groups]
+    contact=set()
+    for owner in range(2):
+        other=1-owner
+        for x,y in groups[owner]:
+            if any((x+dx,y+dy) in occupied[other] for dx,dy in directions[:4]): contact.add((x,y))
+    for owner,group in enumerate(groups):
+        cx,cy=centers[owner]
+        for x,y in group:
+            angle=math.atan2(y-cy,x-cx); radius=math.hypot(x-cx,y-cy)
+            shade=1 if (x,y) in contact else max(2,min(13,lround(7+5*math.sin(angle*2.3+radius*.7+owner*1.7))))
+            block(a,x*unit,y*unit,unit,unit,shade)
+    for _ in range(r.range(3,7)):
+        owner=r.range(0,2); x,y=groups[owner][r.range(0,len(groups[owner]))]
+        x+=-3 if r.chance(.5) else 3; y+=-3 if r.chance(.5) else 3
+        if 0<=x<cols and 0<=y<rows and (x,y) not in occupied[0] and (x,y) not in occupied[1]:
+            block(a,x*unit,y*unit,unit,unit,r.range(4,12))
+    return a
+
+def pixel_field(seed):
+    r=FirmwareRandom(seed); a=canvas(15); count=r.range(3,6)
+    centers=[(r.range(0,W),r.range(0,CONTENT_H),r.range(28,65),1 if r.chance(.55) else -1) for _ in range(count)]
+    unit=PIXEL_SIZES[r.range(0,6)]; safe=(CONTENT_H//unit)*unit
+    base=.38+r.unit()*.10; strength=.22+r.unit()*.08; rhythm=.08+r.unit()*.05
+    for y in range(0,safe,unit):
+        for x in range(0,W,unit):
+            field=sum(weight*math.exp(-((x-cx)**2+(y-cy)**2)/(2*radius*radius)) for cx,cy,radius,weight in centers)
+            presence=base+strength*field+rhythm*math.sin(x*.055+y*.037)
+            if r.unit()>max(.08,min(.80,presence)): continue
+            shade=max(2,min(13,lround(8-field*4.5+math.sin((x-y)*.025)*1.5)))
+            block(a,x,y,unit,unit,shade)
+    return a
+
+def subdivision(seed, language=None):
+    r=FirmwareRandom(seed); a=canvas(15); macro=PIXEL_SIZES[r.range(0,6)]; sub=2
+    cols,rows,cells=W//macro,CONTENT_H//macro,macro//sub
+    count=r.range(3,6)
+    centers=[(r.range(0,cols),r.range(0,rows),r.range(3,8),1 if r.chance(.58) else -1) for _ in range(count)]
+    languages=(0,2,3); selected=languages[r.range(0,3)]; language=selected if language is None else language
+    phase=r.range(0,6); dark=r.range(0,5); mid=r.range(7,13)
     for gy in range(rows):
         for gx in range(cols):
             field=sum(sign*math.exp(-((gx-cx)**2+(gy-cy)**2)/(2*s*s)) for cx,cy,s,sign in centers)
             rhythm=.12*math.sin(gx*.73+gy*.41+phase)
             presence=max(.10,min(.86,.43+field*.24+rhythm))
-            if r.random()>presence: continue
-            dense=field>.55 and r.random()<.28
+            if r.unit()>presence: continue
+            dense=field>.55 and r.chance(.28)
             flip=((gx+gy+phase)&1)!=0
             for sy in range(cells):
                 for sx in range(cells):
@@ -145,17 +276,17 @@ def subdivision(seed, language):
                         block(a,gx*macro+sx*sub,gy*macro+sy*sub,sub,sub,tone)
     return a
 
-def dither_pressure(seed, mode, pixel=1):
-    r=random.Random(seed); a=canvas(15)
-    centers=[(r.randrange(W),r.randrange(120),r.uniform(24,72),r.choice((-.34,.34))) for _ in range(r.randint(3,5))]
-    ax=r.uniform(.025,.060); ay=r.uniform(.035,.080); diagonal=r.uniform(.012,.037); phase=r.random()*math.tau
+def dither_pressure(seed, mode=None, pixel=1):
+    r=FirmwareRandom(seed); a=canvas(15); count=r.range(3,6)
+    centers=[(r.range(0,W),r.range(0,CONTENT_H),r.range(24,72),.34 if r.chance(.52) else -.34) for _ in range(count)]
+    ax=.025+r.unit()*.035; ay=.035+r.unit()*.045; diagonal=.012+r.unit()*.025; phase=r.unit()*6.28318
     values=[]
     for y in range(120):
         row=[]
         for x in range(W):
             value=.57+.17*math.sin(x*ax+phase)+.13*math.cos(y*ay-phase*.7)+.09*math.sin((x+y)*diagonal)
             value+=sum(weight*math.exp(-((x-cx)**2+(y-cy)**2)/(2*radius*radius)) for cx,cy,radius,weight in centers)
-            row.append(max(0,min(1,value)))
+            row.append(lround(max(0,min(1,value))*4096))
         values.append(row)
     bayer=((0,8,2,10),(12,4,14,6),(3,11,1,9),(15,7,13,5))
     coarse_w,coarse_h=W//pixel,120//pixel
@@ -164,20 +295,21 @@ def dither_pressure(seed, mode, pixel=1):
         row=[]
         for gx in range(coarse_w):
             total=sum(values[y][x] for y in range(gy*pixel,(gy+1)*pixel) for x in range(gx*pixel,(gx+1)*pixel))
-            row.append(total/(pixel*pixel))
+            row.append(total//(pixel*pixel))
         coarse.append(row)
     def coarse_pixel(x,y,value):
         block(a,x*pixel,y*pixel,pixel,pixel,value)
+    selected=r.range(0,2); mode=selected if mode is None else mode
     if mode==0:
-        ox,oy=r.randrange(4),r.randrange(4)
+        ox,oy=r.range(0,4),r.range(0,4)
         for y in range(coarse_h):
-            for x in range(coarse_w): coarse_pixel(x,y,15 if coarse[y][x]>(bayer[(y+oy)&3][(x+ox)&3]+.5)/16 else 0)
+            for x in range(coarse_w): coarse_pixel(x,y,15 if coarse[y][x]>(bayer[(y+oy)&3][(x+ox)&3]*2+1)*128 else 0)
     elif mode==1:
         for y in range(coarse_h):
             for x in range(coarse_w):
-                old=coarse[y][x]; quantized=1 if old>=.5 else 0; coarse_pixel(x,y,15 if quantized else 0); error=(old-quantized)/8
+                old=coarse[y][x]; quantized=4096 if old>=2048 else 0; coarse_pixel(x,y,15 if quantized else 0); error=int((old-quantized)/8)
                 for sx,sy in ((x+1,y),(x+2,y),(x-1,y+1),(x,y+1),(x+1,y+1),(x,y+2)):
-                    if 0<=sx<coarse_w and 0<=sy<coarse_h: coarse[sy][sx]+=error
+                    if 0<=sx<coarse_w and 0<=sy<coarse_h: coarse[sy][sx]=max(-8192,min(12288,coarse[sy][sx]+error))
     return a
 
 SYSTEMS={
@@ -185,12 +317,18 @@ SYSTEMS={
     "motif-field":motif_field,
     "dither-architecture":dither_architecture,
     "cellular-aggregate":cellular_aggregate,
+    "dual-cellular-overlap":lambda seed: dual_cellular(seed,"overlap"),
+    "dual-cellular-boundary":lambda seed: dual_cellular(seed,"boundary"),
+    "dual-cellular-attractor":dual_cellular_attractor,
+    "pixel-field":pixel_field,
+    "subdivision":lambda seed: subdivision(seed),
     "subdivision-woven-checks":lambda seed: subdivision(seed,0),
     "subdivision-open-windows":lambda seed: subdivision(seed,1),
     "subdivision-diagonals":lambda seed: subdivision(seed,2),
     "subdivision-corner-knots":lambda seed: subdivision(seed,3),
     "dither-pressure-ordered":lambda seed: dither_pressure(seed,0),
     "dither-pressure-diffusion":lambda seed: dither_pressure(seed,1),
+    "dither-pressure":lambda seed: dither_pressure(seed),
     "dither-pressure-ordered-large":lambda seed: dither_pressure(seed,0,4),
     "dither-pressure-diffusion-large":lambda seed: dither_pressure(seed,1,4),
 }

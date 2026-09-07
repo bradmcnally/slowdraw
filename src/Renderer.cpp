@@ -38,6 +38,45 @@ void cluster(Random&r,bool){
   for(int i=0;i<count;++i){float angle=atan2f(cells[i].y-cy,cells[i].x-cx),radius=hypotf(cells[i].x-cx,cells[i].y-cy);int shade=std::max(0,std::min(14,int(lroundf(7+5*sinf(angle*2.3f+radius*.7f)))));rect(cells[i].x*unit,cells[i].y*unit,unit,unit,shade);}
   for(int i=0;i<r.range(3,9);++i){Cell echo=cells[r.range(0,count)];echo.x+=r.chance(.5f)?-3:3;echo.y+=r.chance(.5f)?-3:3;if(echo.x>=0&&echo.x<cols&&echo.y>=0&&echo.y<rows)rect(echo.x*unit,echo.y*unit,unit,unit,r.range(3,13));}
 }
+void pairedCluster(Random&r){
+  clear(LIGHT);
+  struct Cell{int x,y;}; Cell groups[2][256];int counts[2]={1,1};
+  const int unit=PIXEL_SIZES[r.range(0,6)],cols=GW/unit,rows=GRID_CONTENT_H/unit;
+  const int marginX=std::max(3,cols/6),marginY=std::max(3,rows/5);
+  const Cell attractor={r.range(cols/3,cols-cols/3),r.range(rows/3,rows-rows/3)};
+  if(r.chance(.35f)){
+    groups[0][0]={r.range(3,cols-3),r.range(1,std::max(2,rows/4))};
+    groups[1][0]={r.range(3,cols-3),r.range(rows-rows/4,rows-1)};
+  }else{
+    groups[0][0]={r.range(1,std::max(2,cols/4)),r.range(3,rows-3)};
+    groups[1][0]={r.range(cols-cols/4,cols-1),r.range(3,rows-3)};
+  }
+  static const int dx[]={1,-1,0,0,1,-1},dy[]={0,0,1,-1,1,-1};
+  auto contains=[&](int owner,int x,int y){for(int i=0;i<counts[owner];++i)if(groups[owner][i].x==x&&groups[owner][i].y==y)return true;return false;};
+  bool touched=false;const int steps=r.range(210,321);
+  for(int step=0;step<steps;++step){
+    const int owner=step&1,other=1-owner;Cell candidate{};bool valid=false;
+    if(!touched&&r.chance(.72f)){
+      Cell base=groups[owner][r.range(0,counts[owner])];float nearest=1e9f;
+      const int samples=std::min(8,counts[owner]);
+      for(int i=0;i<samples;++i){Cell probe=groups[owner][r.range(0,counts[owner])];float sx=probe.x-attractor.x,sy=probe.y-attractor.y,d=sx*sx+sy*sy;if(d<nearest){nearest=d;base=probe;}}
+      float best=1e9f;
+      for(int d=0;d<6;++d){Cell probe={base.x+dx[d],base.y+dy[d]};if(probe.x<1||probe.x>=cols-1||probe.y<1||probe.y>=rows-1||contains(owner,probe.x,probe.y))continue;float sx=probe.x-attractor.x,sy=probe.y-attractor.y,score=sx*sx+sy*sy+r.unit()*8;if(score<best){best=score;candidate=probe;valid=true;}}
+    }else{
+      Cell base=groups[owner][r.range(0,counts[owner])];int d=r.range(0,6);candidate={base.x+dx[d],base.y+dy[d]};
+      valid=candidate.x>=1&&candidate.x<cols-1&&candidate.y>=1&&candidate.y<rows-1&&!contains(owner,candidate.x,candidate.y);
+    }
+    if(!valid)continue;
+    if(contains(other,candidate.x,candidate.y)){touched=true;continue;}
+    if(counts[owner]<256)groups[owner][counts[owner]++]=candidate;
+    for(int d=0;d<4;++d)if(contains(other,candidate.x+dx[d],candidate.y+dy[d]))touched=true;
+  }
+  float centers[2][2]={{0,0},{0,0}};
+  for(int owner=0;owner<2;++owner){for(int i=0;i<counts[owner];++i){centers[owner][0]+=groups[owner][i].x;centers[owner][1]+=groups[owner][i].y;}centers[owner][0]/=counts[owner];centers[owner][1]/=counts[owner];}
+  for(int owner=0;owner<2;++owner)for(int i=0;i<counts[owner];++i){Cell cell=groups[owner][i];bool contact=false;for(int d=0;d<4;++d)if(contains(1-owner,cell.x+dx[d],cell.y+dy[d]))contact=true;float angle=atan2f(cell.y-centers[owner][1],cell.x-centers[owner][0]),radius=hypotf(cell.x-centers[owner][0],cell.y-centers[owner][1]);int shade=contact?1:std::max(2,std::min(13,int(lroundf(7+5*sinf(angle*2.3f+radius*.7f+owner*1.7f)))));rect(cell.x*unit,cell.y*unit,unit,unit,shade);}
+  for(int i=0;i<r.range(3,7);++i){int owner=r.range(0,2);Cell echo=groups[owner][r.range(0,counts[owner])];echo.x+=r.chance(.5f)?-3:3;echo.y+=r.chance(.5f)?-3:3;if(echo.x>=0&&echo.x<cols&&echo.y>=0&&echo.y<rows&&!contains(0,echo.x,echo.y)&&!contains(1,echo.x,echo.y))rect(echo.x*unit,echo.y*unit,unit,unit,r.range(4,12));}
+}
+void cellular(Random&r){if(r.chance(.30f))pairedCluster(r);else cluster(r,false);}
 void pixelField(Random&r){
   clear(LIGHT);
   struct Focus{float x,y,radius,weight;}; Focus focus[5];
@@ -220,8 +259,8 @@ uint16_t gray(uint8_t l){uint8_t v=l*17;return uint16_t(((v&0xF8)<<8)|((v&0xFC)<
 void paint(M5Canvas&c){c.fillScreen(gray(LIGHT));for(int y=0;y<GH;++y)for(int x=0;x<GW;++x)c.fillRect(x*SCALE,y*SCALE,SCALE,SCALE,gray(get(x,y)));}
 } // namespace
 
-PrintInfo makePrintInfo(int year,int month,int day,uint32_t variant,uint8_t recipeMode){PrintInfo i{};uint32_t base=dateSeed(year,month,day,kGeneratorVersion);uint32_t raw=variant?mix32(base^mix32(variant*0x9e3779b9u)):base;if(recipeMode)raw=mix32(raw^mix32(uint32_t(recipeMode)*0x6d2b79f5u));const uint32_t pick=recipeMode?uint32_t(recipeMode-1):mix32(raw^0x51f15e5du)%4u;i.system=pick==0?System::CellularAggregate:(pick==1?System::PixelField:(pick==2?System::Subdivision:System::DitherPressure));i.seed=(raw&0x3fffffffu)|(pick<<30);std::snprintf(i.identity,sizeof(i.identity),"SLOW DRAW  %04d.%02d.%02d/%u",year,month,day,unsigned(variant));return i;}
-PrintInfo makeSeedPrintInfo(uint32_t seed){PrintInfo i{};i.seed=seed;const uint32_t pick=seed>>30;i.system=pick==0?System::CellularAggregate:(pick==1?System::PixelField:(pick==2?System::Subdivision:System::DitherPressure));std::snprintf(i.identity,sizeof(i.identity),"SLOW DRAW  REPLAY");return i;}
+PrintInfo makePrintInfo(int year,int month,int day,uint32_t variant,uint8_t recipeMode){PrintInfo i{};i.generatorVersion=kGeneratorVersion;uint32_t base=dateSeed(year,month,day,kGeneratorVersion);uint32_t raw=variant?mix32(base^mix32(variant*0x9e3779b9u)):base;if(recipeMode)raw=mix32(raw^mix32(uint32_t(recipeMode)*0x6d2b79f5u));const uint32_t pick=recipeMode?uint32_t(recipeMode-1):mix32(raw^0x51f15e5du)%4u;i.system=pick==0?System::CellularAggregate:(pick==1?System::PixelField:(pick==2?System::Subdivision:System::DitherPressure));i.seed=(raw&0x3fffffffu)|(pick<<30);std::snprintf(i.identity,sizeof(i.identity),"SLOW DRAW  %04d.%02d.%02d/%u",year,month,day,unsigned(variant));return i;}
+PrintInfo makeSeedPrintInfo(uint32_t seed,uint32_t generatorVersion){PrintInfo i{};i.seed=seed;i.generatorVersion=generatorVersion;const uint32_t pick=seed>>30;i.system=pick==0?System::CellularAggregate:(pick==1?System::PixelField:(pick==2?System::Subdivision:System::DitherPressure));std::snprintf(i.identity,sizeof(i.identity),"SLOW DRAW  REPLAY");return i;}
 const char* systemName(System s){if(s==System::CellularAggregate)return "CELLULAR AGGREGATE";if(s==System::PixelField)return "PIXEL FIELD";if(s==System::Subdivision)return "SUBDIVISION";if(s==System::DitherPressure)return "DITHER PRESSURE";return "MIRRORED LATTICE";}
-void renderPrint(M5Canvas&c,const PrintInfo&i){Random r(i.seed);if(i.system==System::CellularAggregate)cluster(r,false);else if(i.system==System::PixelField)pixelField(r);else if(i.system==System::Subdivision)subdivision(r);else if(i.system==System::DitherPressure)ditherPressure(r);else mirroredLattice(r);paint(c);c.fillRect(0,GRID_CONTENT_H*SCALE,kCanvasWidth,kCanvasHeight-GRID_CONTENT_H*SCALE,gray(LIGHT));c.setTextColor(gray(DARK),gray(LIGHT));c.setTextSize(2);const int labelY=(GRID_CONTENT_H*SCALE+kCanvasHeight)/2;const char* dateLabel=i.identity+11;char printLabel[40];std::snprintf(printLabel,sizeof(printLabel),"%s  %08X",dateLabel,unsigned(i.seed));c.setTextDatum(middle_left);c.drawString("SLOW DRAW",24,labelY);c.setTextDatum(middle_right);c.drawString(printLabel,kCanvasWidth-24,labelY);}
+void renderPrint(M5Canvas&c,const PrintInfo&i){Random r(i.seed);if(i.system==System::CellularAggregate)cellular(r);else if(i.system==System::PixelField)pixelField(r);else if(i.system==System::Subdivision)subdivision(r);else if(i.system==System::DitherPressure)ditherPressure(r);else mirroredLattice(r);paint(c);c.fillRect(0,GRID_CONTENT_H*SCALE,kCanvasWidth,kCanvasHeight-GRID_CONTENT_H*SCALE,gray(LIGHT));c.setTextColor(gray(DARK),gray(LIGHT));c.setTextSize(2);const int labelY=(GRID_CONTENT_H*SCALE+kCanvasHeight)/2;const char* dateLabel=i.identity+11;char printLabel[48];std::snprintf(printLabel,sizeof(printLabel),"%s  V%u:%08X",dateLabel,unsigned(i.generatorVersion),unsigned(i.seed));c.setTextDatum(middle_left);c.drawString("SLOW DRAW",24,labelY);c.setTextDatum(middle_right);c.drawString(printLabel,kCanvasWidth-24,labelY);}
 } // namespace slow_draw

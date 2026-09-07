@@ -6,13 +6,20 @@ boot it reads the hardware RTC, derives a deterministic seed from the calendar
 date and generator version, renders one monochrome composition, refreshes the
 e-paper display, and sleeps until just after midnight.
 
-![Slow Draw pixel field composition](slow-draw-005-eink.png)
-![Slow Draw cellular aggregate composition](slow-draw-003-eink.png)
+![Slow Draw 001](slow-draw-001.png)
+![Slow Draw 002](slow-draw-002.png)
+![Slow Draw 003](slow-draw-003.png)
+![Slow Draw 004](slow-draw-004.png)
+![Slow Draw 005](slow-draw-005.png)
+![Slow Draw 006](slow-draw-006.png)
+
 
 
 The current curated generator uses four grammars. Cellular Aggregate grows
 connected cells from a seeded random walk; grayscale follows angle and distance
 through the resulting mass, while a few detached cells create visual echoes.
+Thirty percent of Cellular prints grow two masses toward a shared attractor,
+darkening their contact edge; the remainder use the original single aggregate.
 Pixel Field distributes the same uniform square pixels independently across the
 full canvas, with broad mathematical fields controlling density, omissions, and
 grayscale. Subdivision arranges patterned macro-cells made from smaller pixels,
@@ -59,9 +66,9 @@ The display is targeted at 960 × 540 in landscape orientation. Generator output
 is deterministic for `(date, variant, generator version, recipe mode)`. The
 recipe mode is folded into the full 32-bit seed, so the same date and variant
 have distinct seeds in each locked recipe. `ALL` preserves the original seed
-sequence. The seed's top two bits encode the actual recipe, making the complete
-eight-digit hexadecimal seed sufficient to replay the artwork by itself. The
-footer displays that complete seed rather than a shortened suffix. Changing
+sequence. The seed's top two bits encode the actual recipe. The footer displays
+a versioned replay identity such as `V14:E92B7DE2`; both parts are required so
+a future generator cannot silently reinterpret an older seed. Changing
 `kGeneratorVersion` intentionally starts a new sequence.
 
 ## Framebuffer capture
@@ -84,7 +91,20 @@ To temporarily recreate and capture an artwork from its complete displayed
 seed, without changing the RTC or saved current print:
 
 ```sh
-./tools/capture.py --seed E92B7DE2
+./tools/capture.py --seed V14:E92B7DE2
+```
+
+Replay identities from unsupported generator versions are rejected rather than
+rendered incorrectly.
+
+## Output studies and tests
+
+The active desktop studies use the same xorshift RNG, call order, parameter
+ranges, and logical 240 × 124 canvas as the firmware:
+
+```sh
+python3 tools/contact_sheet.py cellular-aggregate pixel-field subdivision dither-pressure
+python3 -m unittest discover -s tests -v
 ```
 
 To recolor a capture with the muted, slightly warm 16-tone palette measured
