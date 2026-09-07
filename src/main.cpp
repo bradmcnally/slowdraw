@@ -154,8 +154,14 @@ void drawSettings() {
     printCanvas.setTextSize(2);printCanvas.setTextDatum(middle_center);
     printCanvas.drawString(label,x+w/2,y+h/2);
   };
-  printCanvas.setTextColor(0,15);printCanvas.setTextDatum(middle_center);printCanvas.setTextSize(3);
-  printCanvas.drawString("SLOW DRAW SETTINGS",slow_draw::kCanvasWidth/2,45);
+  printCanvas.setTextColor(0,15);printCanvas.setTextDatum(middle_left);printCanvas.setTextSize(3);
+  printCanvas.drawString("PRINT OPTIONS",50,45);
+  const auto info=slow_draw::makePrintInfo(displayedDate.year,displayedDate.month,
+      displayedDate.date,variant,recipeMode,cadenceMode?displayedHour:-1);
+  char replayLabel[16];std::snprintf(replayLabel,sizeof(replayLabel),"%02X%08X",
+      unsigned(info.generatorVersion),unsigned(info.seed));
+  printCanvas.setTextColor(5,15);printCanvas.setTextSize(2);printCanvas.setTextDatum(middle_right);
+  printCanvas.drawString(replayLabel,910,45);
   printCanvas.setTextSize(2);printCanvas.setTextDatum(middle_left);printCanvas.drawString("NEW ARTWORK",50,95);
   button(50,120,410,70,"DAILY",cadenceMode==0);button(500,120,410,70,"HOURLY",cadenceMode==1);
   printCanvas.setTextColor(0,15);printCanvas.setTextDatum(middle_left);printCanvas.drawString("RECIPE",50,220);
