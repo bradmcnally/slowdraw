@@ -10,6 +10,10 @@ import termios
 import time
 import zlib
 import re
+import subprocess
+import sys
+import shutil
+import tempfile
 
 
 PORT_PATTERNS = (
@@ -20,6 +24,12 @@ PORT_PATTERNS = (
     "/dev/ttyACM*",
 )
 CURRENT_GENERATOR_VERSION = 15
+EINK_PALETTE = (
+    (55, 55, 55), (63, 63, 63), (70, 70, 70), (78, 78, 78),
+    (87, 87, 87), (97, 97, 97), (111, 111, 111), (115, 115, 115),
+    (119, 119, 119), (124, 124, 124), (130, 130, 130), (137, 137, 137),
+    (145, 145, 145), (148, 148, 148), (154, 154, 152), (158, 158, 155),
+)
 
 
 def find_port():
@@ -159,6 +169,32 @@ def next_capture_path():
         number += 1
 
 
+def create_eink_preview(source):
+    if shutil.which("magick") is None:
+        print("Capture saved, but e-ink preview requires ImageMagick.", file=sys.stderr)
+        return
+    stem, _ = os.path.splitext(source)
+    output = f"{stem}-eink.png"
+    number = 2
+    while os.path.exists(output):
+        output = f"{stem}-eink-{number:03d}.png"
+        number += 1
+    with tempfile.TemporaryDirectory(prefix="slow-draw-eink-") as temp:
+        clut = os.path.join(temp, "palette.ppm")
+        with open(clut, "wb") as palette_file:
+            palette_file.write(b"P6\n16 1\n255\n")
+            palette_file.write(bytes(channel for color in EINK_PALETTE for channel in color))
+        try:
+            subprocess.run([
+                "magick", source, "-colorspace", "Gray", "-posterize", "16",
+                clut, "-interpolate", "NearestNeighbor", "-clut", output,
+            ], check=True, capture_output=True, text=True)
+        except subprocess.CalledProcessError as error:
+            print(f"Capture saved, but e-ink preview failed: {error.stderr.strip()}", file=sys.stderr)
+            return
+    print(f"Saved e-ink preview to {output}")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("output", nargs="?")
@@ -166,6 +202,7 @@ def main():
     parser.add_argument("--no-reset", action="store_true", help="try capturing without resetting the sleeping device")
     parser.add_argument("--variant", type=parse_variant, help="render and select this same-day variant before capture")
     parser.add_argument("--seed", type=parse_seed_identity, help="temporarily recreate a displayed versioned seed")
+    parser.add_argument("--no-preview", action="store_true", help="skip the automatic e-ink palette preview")
     args = parser.parse_args()
     if args.variant is not None and args.seed is not None:
         parser.error("--variant and --seed cannot be used together")
@@ -194,6 +231,8 @@ def main():
         packed = read_exact(fd, response[header_end + 1:], length)
         save_png(output_path, width, height, packed)
         print(f"Saved {width}x{height} capture from {port} to {output_path}")
+        if not args.no_preview:
+            create_eink_preview(output_path)
     finally:
         os.close(fd)
 
