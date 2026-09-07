@@ -2,15 +2,9 @@
 
 Slow Draw is an e-ink art project for the original M5Paper 1.1. It reads the hardware RTC, derives a seed, renders a composition using the panel's 16 grayscale levels, and sleeps until the next scheduled print or user interaction.
 
-![Slow Draw 001](slow-draw-001.png)
-![Slow Draw 002](slow-draw-002.png)
-![Slow Draw 003](slow-draw-003.png)
-![Slow Draw 004](slow-draw-004.png)
-![Slow Draw 005](slow-draw-005.png)
-![Slow Draw 006](slow-draw-006.png)
-![Slow Draw 007](slow-draw-007.png)
-
-
+![Slow Draw 001](examples/slow-draw-001.png)![Slow Draw 002](examples/slow-draw-002.png)![Slow Draw 003](examples/slow-draw-003.png)
+![Slow Draw 004](examples/slow-draw-004.png)![Slow Draw 005](examples/slow-draw-005.png)![Slow Draw 006](examples/slow-draw-006.png)
+![Slow Draw 007](examples/slow-draw-007.png)
 
 - Cellular Aggregate grows
 connected cells from a seeded random walk; grayscale follows angle and distance through the resulting mass, while a few detached cells create visual echoes.

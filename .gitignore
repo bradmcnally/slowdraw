@@ -4,3 +4,4 @@ outputs/
 captures/
 __pycache__/
 *.py[cod]
+.gitignore
