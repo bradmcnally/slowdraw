@@ -8,9 +8,9 @@ namespace slow_draw {
 constexpr int kCanvasWidth = 960;
 constexpr int kCanvasHeight = 540;
 constexpr int kFooterHeight = 42;
-constexpr uint32_t kGeneratorVersion = 10;
+constexpr uint32_t kGeneratorVersion = 12;
 
-enum class System : uint8_t { CellularAggregate, PixelField, MirroredLattice, Subdivision };
+enum class System : uint8_t { CellularAggregate, PixelField, MirroredLattice, Subdivision, DitherPressure };
 
 struct PrintInfo {
   uint32_t seed;

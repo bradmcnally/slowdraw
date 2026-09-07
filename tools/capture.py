@@ -76,7 +76,22 @@ def request_frame(fd, timeout):
     return bytes(data)
 
 
-def read_exact(fd, initial, count, timeout=45):
+def request_variant(fd, variant, timeout=30):
+    data = bytearray()
+    deadline = time.monotonic() + timeout
+    next_request = time.monotonic()
+    marker = f"SDVARIANT {variant}".encode()
+    command = f"VARIANT {variant}\n".encode()
+    while marker not in data:
+        if time.monotonic() > deadline:
+            raise SystemExit("The device did not confirm the requested variant.")
+        if time.monotonic() >= next_request:
+            os.write(fd, command)
+            next_request = time.monotonic() + 8.0
+        data.extend(read_some(fd))
+
+
+def read_exact(fd, initial, count, timeout=120):
     data = bytearray(initial)
     deadline = time.monotonic() + timeout
     while len(data) < count:
@@ -120,7 +135,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("output", nargs="?")
     parser.add_argument("--port")
-    parser.add_argument("--no-reset", action="store_true", help="do not reset the device before capture")
+    parser.add_argument("--no-reset", action="store_true", help="try capturing without resetting the sleeping device")
+    parser.add_argument("--variant", type=int, help="render and select this same-day variant before capture")
     args = parser.parse_args()
     output_path = args.output or next_capture_path()
     port = args.port or find_port()
@@ -131,6 +147,8 @@ def main():
         if not args.no_reset:
             reset_device(fd)
             time.sleep(0.4)
+        if args.variant is not None:
+            request_variant(fd, args.variant)
         response = request_frame(fd, 20)
         header_start = response.index(b"SDFRAME ")
         while b"\n" not in response[header_start:]:

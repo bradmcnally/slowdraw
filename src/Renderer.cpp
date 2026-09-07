@@ -10,6 +10,7 @@ constexpr uint8_t LIGHT=15, DARK=0;
 constexpr int BAYER[4][4]={{0,8,2,10},{12,4,14,6},{3,11,1,9},{15,7,13,5}};
 constexpr int PIXEL_SIZES[]={8,10,10,10,10,12};
 uint8_t px[GW*GH];
+int16_t pressure[GW*GRID_CONTENT_H];
 void clear(uint8_t s=LIGHT){std::fill_n(px,GW*GH,s);}
 void dot(int x,int y,uint8_t s){if(x>=0&&x<GW&&y>=0&&y<GH)px[y*GW+x]=s&15;}
 uint8_t get(int x,int y){return(x>=0&&x<GW&&y>=0&&y<GH)?px[y*GW+x]:LIGHT;}
@@ -107,6 +108,45 @@ void subdivision(Random&r){
     }
   }
 }
+void buildPressureField(Random&r){
+  struct Focus{float x,y,radius,weight;}; Focus focus[5];
+  const int focusCount=r.range(3,6);
+  for(int i=0;i<focusCount;++i){
+    focus[i]={float(r.range(0,GW)),float(r.range(0,GRID_CONTENT_H)),float(r.range(24,72)),r.chance(.52f)?.34f:-.34f};
+  }
+  const float ax=.025f+r.unit()*.035f,ay=.035f+r.unit()*.045f;
+  const float diagonal=.012f+r.unit()*.025f,phase=r.unit()*6.28318f;
+  for(int y=0;y<GRID_CONTENT_H;++y)for(int x=0;x<GW;++x){
+    float value=.57f+.17f*sinf(x*ax+phase)+.13f*cosf(y*ay-phase*.7f)+.09f*sinf((x+y)*diagonal);
+    for(int i=0;i<focusCount;++i){
+      const float dx=x-focus[i].x,dy=y-focus[i].y,s=focus[i].radius;
+      value+=focus[i].weight*expf(-(dx*dx+dy*dy)/(2*s*s));
+    }
+    pressure[y*GW+x]=static_cast<int16_t>(lroundf(std::max(0.0f,std::min(1.0f,value))*4096.0f));
+  }
+}
+void ditherPressure(Random&r){
+  clear(LIGHT);buildPressureField(r);
+  const int mode=r.range(0,2);
+  if(mode==0){
+    // Bayer thresholds turn the smooth field into an overt geometric screen.
+    const int ox=r.range(0,4),oy=r.range(0,4);
+    for(int y=0;y<GRID_CONTENT_H;++y)for(int x=0;x<GW;++x){
+      const int value=pressure[y*GW+x];
+      const int threshold=(BAYER[(y+oy)&3][(x+ox)&3]*2+1)*128;
+      dot(x,y,value>threshold?LIGHT:DARK);
+    }
+  }else{
+    // Atkinson diffusion deliberately retains error, producing hard contrast.
+    for(int y=0;y<GRID_CONTENT_H;++y)for(int x=0;x<GW;++x){
+      const int index=y*GW+x;const int old=pressure[index];
+      const int quantized=old>=2048?4096:0;dot(x,y,quantized?LIGHT:DARK);
+      const int error=(old-quantized)/8;
+      auto spread=[&](int sx,int sy){if(sx>=0&&sx<GW&&sy>=0&&sy<GRID_CONTENT_H){const int target=pressure[sy*GW+sx]+error;pressure[sy*GW+sx]=static_cast<int16_t>(std::max(-8192,std::min(12288,target)));}};
+      spread(x+1,y);spread(x+2,y);spread(x-1,y+1);spread(x,y+1);spread(x+1,y+1);spread(x,y+2);
+    }
+  }
+}
 void mirroredLattice(Random&r){
   clear(LIGHT);
   const int unit=PIXEL_SIZES[r.range(0,6)];
@@ -180,7 +220,7 @@ uint16_t gray(uint8_t l){uint8_t v=l*17;return uint16_t(((v&0xF8)<<8)|((v&0xFC)<
 void paint(M5Canvas&c){c.fillScreen(gray(LIGHT));for(int y=0;y<GH;++y)for(int x=0;x<GW;++x)c.fillRect(x*SCALE,y*SCALE,SCALE,SCALE,gray(get(x,y)));}
 } // namespace
 
-PrintInfo makePrintInfo(int year,int month,int day,uint32_t variant){PrintInfo i{};uint32_t base=dateSeed(year,month,day,kGeneratorVersion);i.seed=variant?mix32(base^mix32(variant*0x9e3779b9u)):base;const uint32_t pick=mix32(i.seed^0x51f15e5du)%3u;i.system=pick==0?System::CellularAggregate:(pick==1?System::PixelField:System::Subdivision);std::snprintf(i.identity,sizeof(i.identity),"SLOW DRAW  %04d.%02d.%02d/%u",year,month,day,unsigned(variant));return i;}
-const char* systemName(System s){if(s==System::CellularAggregate)return "CELLULAR AGGREGATE";if(s==System::PixelField)return "PIXEL FIELD";if(s==System::Subdivision)return "SUBDIVISION";return "MIRRORED LATTICE";}
-void renderPrint(M5Canvas&c,const PrintInfo&i){Random r(i.seed);if(i.system==System::CellularAggregate)cluster(r,false);else if(i.system==System::PixelField)pixelField(r);else if(i.system==System::Subdivision)subdivision(r);else mirroredLattice(r);paint(c);c.fillRect(0,GRID_CONTENT_H*SCALE,kCanvasWidth,kCanvasHeight-GRID_CONTENT_H*SCALE,gray(LIGHT));c.setTextColor(gray(DARK),gray(LIGHT));c.setTextSize(2);const int labelY=(GRID_CONTENT_H*SCALE+kCanvasHeight)/2;char seedLabel[5];std::snprintf(seedLabel,sizeof(seedLabel),"%04X",unsigned(i.seed&0xFFFFu));c.setTextDatum(middle_left);c.drawString(i.identity,24,labelY);c.setTextDatum(middle_right);c.drawString(seedLabel,kCanvasWidth-24,labelY);}
+PrintInfo makePrintInfo(int year,int month,int day,uint32_t variant){PrintInfo i{};uint32_t base=dateSeed(year,month,day,kGeneratorVersion);i.seed=variant?mix32(base^mix32(variant*0x9e3779b9u)):base;const uint32_t pick=mix32(i.seed^0x51f15e5du)%4u;i.system=pick==0?System::CellularAggregate:(pick==1?System::PixelField:(pick==2?System::Subdivision:System::DitherPressure));std::snprintf(i.identity,sizeof(i.identity),"SLOW DRAW  %04d.%02d.%02d/%u",year,month,day,unsigned(variant));return i;}
+const char* systemName(System s){if(s==System::CellularAggregate)return "CELLULAR AGGREGATE";if(s==System::PixelField)return "PIXEL FIELD";if(s==System::Subdivision)return "SUBDIVISION";if(s==System::DitherPressure)return "DITHER PRESSURE";return "MIRRORED LATTICE";}
+void renderPrint(M5Canvas&c,const PrintInfo&i){Random r(i.seed);if(i.system==System::CellularAggregate)cluster(r,false);else if(i.system==System::PixelField)pixelField(r);else if(i.system==System::Subdivision)subdivision(r);else if(i.system==System::DitherPressure)ditherPressure(r);else mirroredLattice(r);paint(c);c.fillRect(0,GRID_CONTENT_H*SCALE,kCanvasWidth,kCanvasHeight-GRID_CONTENT_H*SCALE,gray(LIGHT));c.setTextColor(gray(DARK),gray(LIGHT));c.setTextSize(2);const int labelY=(GRID_CONTENT_H*SCALE+kCanvasHeight)/2;const char* dateLabel=i.identity+11;char printLabel[36];std::snprintf(printLabel,sizeof(printLabel),"%s  %04X",dateLabel,unsigned(i.seed&0xFFFFu));c.setTextDatum(middle_left);c.drawString("SLOW DRAW",24,labelY);c.setTextDatum(middle_right);c.drawString(printLabel,kCanvasWidth-24,labelY);}
 } // namespace slow_draw

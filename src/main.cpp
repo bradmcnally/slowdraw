@@ -98,7 +98,21 @@ void processSerial() {
     if (ch == '\r') continue;
     if (ch == '\n') {
       serialLine[serialLineLength] = '\0';
-      if (std::strcmp(serialLine, "CAPTURE") == 0) sendFramebuffer();
+      if (std::strcmp(serialLine, "CAPTURE") == 0) {
+        sendFramebuffer();
+      } else if (std::strncmp(serialLine, "VARIANT ", 8) == 0) {
+        char* end = nullptr;
+        const unsigned long requested = std::strtoul(serialLine + 8, &end, 10);
+        if (end != serialLine + 8 && *end == '\0') {
+          variant = static_cast<uint32_t>(requested);
+          saveVariant(displayedDate);
+          showPrint(displayedDate);
+          Serial.printf("SDVARIANT %u\n", unsigned(variant));
+          Serial.flush();
+          // Keep the command window open for the capture request that follows.
+          delay(1000);
+        }
+      }
       serialLineLength = 0;
     } else if (serialLineLength + 1 < sizeof(serialLine)) {
       serialLine[serialLineLength++] = ch;

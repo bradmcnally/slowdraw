@@ -10,13 +10,15 @@ e-paper display, and sleeps until just after midnight.
 ![Slow Draw cellular aggregate composition](slow-draw-003-eink.png)
 
 
-The current curated generator uses three grammars. Cellular Aggregate grows
+The current curated generator uses four grammars. Cellular Aggregate grows
 connected cells from a seeded random walk; grayscale follows angle and distance
 through the resulting mass, while a few detached cells create visual echoes.
 Pixel Field distributes the same uniform square pixels independently across the
 full canvas, with broad mathematical fields controlling density, omissions, and
 grayscale. Subdivision arranges patterned macro-cells made from smaller pixels,
-using woven checks, diagonal bands, or corner knots. None of the
+using woven checks, diagonal bands, or corner knots. Dither Pressure converts
+smooth abstract fields into hard black-and-white Bayer screens or Atkinson
+error diffusion. None of the
 grammars deliberately depict a character, object, or environment,
 though forms may occasionally feel suggestive. Artwork is quantized to a
 240-pixel-wide logical grid and displayed as crisp 4 × 4 blocks. The renderer
@@ -60,8 +62,12 @@ The retained 16-shade framebuffer can be captured over the USB cable:
 ```
 
 Captures are saved as `slow-draw-001.png`, `slow-draw-002.png`, and so on.
-The current date and rocker variant persist when the capture tool resets the
-device.
+Capture resets the sleeping device so its USB serial connection answers
+reliably. The current date and variant are restored from storage, so it rerenders
+the same artwork before transferring the framebuffer. Pass `--no-reset` to try
+capturing without a reset.
+Use `--variant NUMBER` to recreate, select, and capture a particular same-day
+variant. The selected variant persists across restarts for the current date.
 
 To recolor a capture with the muted, slightly warm 16-tone palette measured
 from the photographed M5Paper display:

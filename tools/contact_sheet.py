@@ -145,6 +145,41 @@ def subdivision(seed, language):
                         block(a,gx*macro+sx*sub,gy*macro+sy*sub,sub,sub,tone)
     return a
 
+def dither_pressure(seed, mode, pixel=1):
+    r=random.Random(seed); a=canvas(15)
+    centers=[(r.randrange(W),r.randrange(120),r.uniform(24,72),r.choice((-.34,.34))) for _ in range(r.randint(3,5))]
+    ax=r.uniform(.025,.060); ay=r.uniform(.035,.080); diagonal=r.uniform(.012,.037); phase=r.random()*math.tau
+    values=[]
+    for y in range(120):
+        row=[]
+        for x in range(W):
+            value=.57+.17*math.sin(x*ax+phase)+.13*math.cos(y*ay-phase*.7)+.09*math.sin((x+y)*diagonal)
+            value+=sum(weight*math.exp(-((x-cx)**2+(y-cy)**2)/(2*radius*radius)) for cx,cy,radius,weight in centers)
+            row.append(max(0,min(1,value)))
+        values.append(row)
+    bayer=((0,8,2,10),(12,4,14,6),(3,11,1,9),(15,7,13,5))
+    coarse_w,coarse_h=W//pixel,120//pixel
+    coarse=[]
+    for gy in range(coarse_h):
+        row=[]
+        for gx in range(coarse_w):
+            total=sum(values[y][x] for y in range(gy*pixel,(gy+1)*pixel) for x in range(gx*pixel,(gx+1)*pixel))
+            row.append(total/(pixel*pixel))
+        coarse.append(row)
+    def coarse_pixel(x,y,value):
+        block(a,x*pixel,y*pixel,pixel,pixel,value)
+    if mode==0:
+        ox,oy=r.randrange(4),r.randrange(4)
+        for y in range(coarse_h):
+            for x in range(coarse_w): coarse_pixel(x,y,15 if coarse[y][x]>(bayer[(y+oy)&3][(x+ox)&3]+.5)/16 else 0)
+    elif mode==1:
+        for y in range(coarse_h):
+            for x in range(coarse_w):
+                old=coarse[y][x]; quantized=1 if old>=.5 else 0; coarse_pixel(x,y,15 if quantized else 0); error=(old-quantized)/8
+                for sx,sy in ((x+1,y),(x+2,y),(x-1,y+1),(x,y+1),(x+1,y+1),(x,y+2)):
+                    if 0<=sx<coarse_w and 0<=sy<coarse_h: coarse[sy][sx]+=error
+    return a
+
 SYSTEMS={
     "scanline-erosion":scanline_erosion,
     "motif-field":motif_field,
@@ -154,6 +189,10 @@ SYSTEMS={
     "subdivision-open-windows":lambda seed: subdivision(seed,1),
     "subdivision-diagonals":lambda seed: subdivision(seed,2),
     "subdivision-corner-knots":lambda seed: subdivision(seed,3),
+    "dither-pressure-ordered":lambda seed: dither_pressure(seed,0),
+    "dither-pressure-diffusion":lambda seed: dither_pressure(seed,1),
+    "dither-pressure-ordered-large":lambda seed: dither_pressure(seed,0,4),
+    "dither-pressure-diffusion-large":lambda seed: dither_pressure(seed,1,4),
 }
 
 def main():
