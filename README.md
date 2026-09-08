@@ -35,6 +35,7 @@ Press the rocker left or right to cycle the current recipe preference: `ALL`,
 Tap the artwork to open `PRINT OPTIONS`:
 
 - The 10-character replay code for the current artwork
+- The current RTC date and time, plus the next scheduled print time
 - Daily mode creates one scheduled print just after midnight.
 - Hourly mode operates only during desk hours, producing prints at 7:00, 8:00,
   and each hour through 17:00. The 17:00 print remains unchanged overnight until
@@ -52,6 +53,20 @@ pio device monitor
 
 If the device RTC is unset, the firmware initializes it from the computer's
 local build timestamp on first boot. No Wi-Fi or manual clock setup is needed.
+
+To set an already-valid RTC to the computer's current local time:
+
+```sh
+./tools/set_clock.py
+```
+
+An explicit date and time can also be supplied:
+
+```sh
+./tools/set_clock.py --datetime "2026-09-08 14:37:00"
+```
+
+Setting the clock rerenders the appropriate daily or desk-hours hourly print.
 
 ## Framebuffer capture
 

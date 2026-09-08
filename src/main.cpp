@@ -20,7 +20,7 @@ uint8_t recipeMode = 0;
 uint8_t cadenceMode = 0;  // 0 = daily, 1 = hourly
 m5::rtc_date_t displayedDate;
 uint8_t displayedHour = 0;
-char serialLine[24] = {};
+char serialLine[40] = {};
 size_t serialLineLength = 0;
 
 uint32_t dateKey(const m5::rtc_date_t& date) {
@@ -155,19 +155,26 @@ void drawSettings() {
     printCanvas.drawString(label,x+w/2,y+h/2);
   };
   printCanvas.setTextColor(0,15);printCanvas.setTextDatum(middle_left);printCanvas.setTextSize(3);
-  printCanvas.drawString("PRINT OPTIONS",50,45);
+  printCanvas.drawString("OPTIONS",50,45);
   const auto info=slow_draw::makePrintInfo(displayedDate.year,displayedDate.month,
       displayedDate.date,variant,recipeMode,cadenceMode?displayedHour:-1);
   char replayLabel[16];std::snprintf(replayLabel,sizeof(replayLabel),"%02X%08X",
       unsigned(info.generatorVersion),unsigned(info.seed));
   printCanvas.setTextColor(5,15);printCanvas.setTextSize(2);printCanvas.setTextDatum(middle_right);
   printCanvas.drawString(replayLabel,910,45);
-  printCanvas.setTextSize(2);printCanvas.setTextDatum(middle_left);printCanvas.drawString("NEW ARTWORK",50,95);
+  const auto today=M5.Rtc.getDate();const auto now=M5.Rtc.getTime();
+  char clockLabel[64];
+  if(!cadenceMode)std::snprintf(clockLabel,sizeof(clockLabel),"%04d.%02d.%02d  %02d:%02d  /  NEXT 00:00",today.year,today.month,today.date,now.hours,now.minutes);
+  else if(now.hours>=17)std::snprintf(clockLabel,sizeof(clockLabel),"%04d.%02d.%02d  %02d:%02d  /  NEXT 07:00 TOMORROW",today.year,today.month,today.date,now.hours,now.minutes);
+  else std::snprintf(clockLabel,sizeof(clockLabel),"%04d.%02d.%02d  %02d:%02d  /  NEXT %02d:00",today.year,today.month,today.date,now.hours,now.minutes,now.hours<7?7:now.hours+1);
+  printCanvas.setTextColor(0,15);printCanvas.setTextSize(2);printCanvas.setTextDatum(middle_left);printCanvas.drawString("NEW ARTWORK",50,95);
   button(50,120,410,70,"DAILY",cadenceMode==0);button(500,120,410,70,"HOURLY",cadenceMode==1);
-  printCanvas.setTextColor(0,15);printCanvas.setTextDatum(middle_left);printCanvas.drawString("RECIPE",50,220);
+  printCanvas.setTextColor(5,15);printCanvas.setTextDatum(middle_center);
+  printCanvas.drawString(clockLabel,slow_draw::kCanvasWidth/2,220);
+  printCanvas.setTextColor(0,15);printCanvas.setTextDatum(middle_left);printCanvas.drawString("RECIPE",50,250);
   static const char* labels[]={"ALL","CELLULAR","PIXEL FIELD","SUBDIVISION","DITHER","MURMURATION"};
-  for(int i=0;i<6;++i){const int col=i%3,row=i/3;button(50+col*300,245+row*82,270,62,labels[i],recipeMode==i);}
-  button(350,430,260,70,"DONE",false);
+  for(int i=0;i<6;++i){const int col=i%3,row=i/3;button(50+col*300,275+row*70,270,58,labels[i],recipeMode==i);}
+  button(50,435,860,70,"DONE",false);
   printCanvas.pushSprite(0,0);
 }
 
@@ -181,8 +188,8 @@ void showSettings() {
       if(touch.wasClicked()){
         const int x=touch.x,y=touch.y;
         if(y>=120&&y<190){cadenceMode=x<480?0:1;saveCadenceMode();variant=0;currentPrintPeriod(M5.Rtc.getDate(),M5.Rtc.getTime(),displayedDate,displayedHour);saveVariant(displayedDate,displayedHour);drawSettings();}
-        else if(y>=245&&y<389&&x>=50&&x<920){const int col=(x-50)/300,row=(y-245)/82,index=row*3+col;if(index>=0&&index<6){recipeMode=index;saveRecipeMode();variant=0;saveVariant(displayedDate,displayedHour);drawSettings();}}
-        else if(y>=430&&y<510&&x>=350&&x<610)break;
+        else if(y>=275&&y<403&&x>=50&&x<920){const int col=(x-50)/300,row=(y-275)/70,index=row*3+col;if(index>=0&&index<6){recipeMode=index;saveRecipeMode();variant=0;saveVariant(displayedDate,displayedHour);drawSettings();}}
+        else if(y>=435&&y<505&&x>=50&&x<910)break;
       }
     }
     delay(10);
@@ -250,6 +257,23 @@ void processSerial() {
           Serial.printf("SDACCEPT SEED %02X%08X\n", version, requested);
           Serial.flush();
           showSeed(static_cast<uint32_t>(requested), version);
+        }
+      } else if (std::strncmp(serialLine, "CLOCK ", 6) == 0) {
+        int year=0,month=0,day=0,hours=0,minutes=0,seconds=0;char trailing=0;
+        if(std::sscanf(serialLine+6,"%d.%d.%d %d:%d:%d%c",&year,&month,&day,
+                       &hours,&minutes,&seconds,&trailing)==6){
+          m5::rtc_date_t requestedDate(year,month,day,weekDay(year,month,day));
+          m5::rtc_time_t requestedTime(hours,minutes,seconds);
+          if(validDate(requestedDate)&&validTime(requestedTime)){
+            while(Serial.available())Serial.read();
+            Serial.printf("SDACCEPT CLOCK %04d.%02d.%02d %02d:%02d:%02d\n",
+                          year,month,day,hours,minutes,seconds);Serial.flush();
+            M5.Rtc.setDateTime(&requestedDate,&requestedTime);delay(20);
+            currentPrintPeriod(requestedDate,requestedTime,displayedDate,displayedHour);
+            variant=0;saveVariant(displayedDate,displayedHour);showPrint(displayedDate);
+            Serial.printf("SDREADY CLOCK %04d.%02d.%02d %02d:%02d:%02d\n",
+                          year,month,day,hours,minutes,seconds);Serial.flush();
+          }
         }
       }
       serialLineLength = 0;
