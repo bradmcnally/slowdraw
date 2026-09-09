@@ -160,7 +160,15 @@ void drawSettings() {
       displayedDate.date,variant,recipeMode,cadenceMode?displayedHour:-1);
   char replayLabel[16];std::snprintf(replayLabel,sizeof(replayLabel),"%02X%08X",
       unsigned(info.generatorVersion),unsigned(info.seed));
-  printCanvas.setTextColor(5,15);printCanvas.setTextSize(2);printCanvas.setTextDatum(middle_right);
+  const int batteryLevel=M5.Power.getBatteryLevel();
+  char batteryLabel[20];
+  if(batteryLevel>=0&&batteryLevel<=100)
+    std::snprintf(batteryLabel,sizeof(batteryLabel),"BATTERY %d%%",batteryLevel);
+  else
+    std::snprintf(batteryLabel,sizeof(batteryLabel),"BATTERY --%%");
+  printCanvas.setTextColor(5,15);printCanvas.setTextSize(2);printCanvas.setTextDatum(middle_center);
+  printCanvas.drawString(batteryLabel,slow_draw::kCanvasWidth/2,45);
+  printCanvas.setTextDatum(middle_right);
   printCanvas.drawString(replayLabel,910,45);
   const auto today=M5.Rtc.getDate();const auto now=M5.Rtc.getTime();
   char clockLabel[64];
