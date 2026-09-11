@@ -15,6 +15,8 @@ constexpr gpio_num_t kRockerPressPin = GPIO_NUM_38;
 constexpr gpio_num_t kRockerLeftPin = GPIO_NUM_37;
 constexpr gpio_num_t kRockerRightPin = GPIO_NUM_39;
 constexpr gpio_num_t kTouchWakePin = GPIO_NUM_36;
+constexpr uint8_t kDeskStartHour = 7;
+constexpr uint8_t kDeskEndHour = 19;
 uint32_t variant = 0;
 uint8_t recipeMode = 0;
 uint8_t cadenceMode = 0;  // 0 = daily, 1 = hourly
@@ -22,6 +24,7 @@ m5::rtc_date_t displayedDate;
 uint8_t displayedHour = 0;
 char serialLine[40] = {};
 size_t serialLineLength = 0;
+char renderedReplayCode[11] = {};
 
 uint32_t dateKey(const m5::rtc_date_t& date) {
   return static_cast<uint32_t>(date.year) * 10000u +
@@ -76,12 +79,21 @@ m5::rtc_date_t previousDate(m5::rtc_date_t date) {
   date.date=maximum;date.weekDay=(date.weekDay+6)%7;return date;
 }
 
+m5::rtc_date_t nextDate(m5::rtc_date_t date) {
+  static const uint8_t days[] = {31,28,31,30,31,30,31,31,30,31,30,31};
+  uint8_t maximum=days[date.month-1];
+  const bool leap=(date.year%4==0&&date.year%100!=0)||date.year%400==0;
+  if(date.month==2&&leap)maximum=29;
+  if(++date.date>maximum){date.date=1;if(++date.month>12){date.month=1;++date.year;}}
+  date.weekDay=(date.weekDay+1)%7;return date;
+}
+
 void currentPrintPeriod(const m5::rtc_date_t& today,const m5::rtc_time_t& now,
                         m5::rtc_date_t& date,uint8_t& hour) {
   date=today;hour=now.hours;
   if(!cadenceMode)return;
-  if(now.hours<7){date=previousDate(today);hour=17;}
-  else if(now.hours>17)hour=17;
+  if(now.hours<kDeskStartHour){date=previousDate(today);hour=kDeskEndHour;}
+  else if(now.hours>kDeskEndHour)hour=kDeskEndHour;
 }
 
 int weekDay(int year, int month, int day) {
@@ -111,9 +123,9 @@ uint32_t secondsUntilNextPrint(const m5::rtc_time_t& time) {
   const uint32_t elapsed = static_cast<uint32_t>(time.hours) * 3600u +
                            static_cast<uint32_t>(time.minutes) * 60u + time.seconds;
   if (cadenceMode) {
-    if(time.hours<7)return 7u*3600u-elapsed+5u;
-    if(time.hours<17)return 3600u-(elapsed%3600u)+5u;
-    return 86400u-elapsed+7u*3600u+5u;
+    if(time.hours<kDeskStartHour)return kDeskStartHour*3600u-elapsed+5u;
+    if(time.hours<kDeskEndHour)return 3600u-(elapsed%3600u)+5u;
+    return 86400u-elapsed+kDeskStartHour*3600u+5u;
   }
   return 86400u - elapsed + 5u;
 }
@@ -126,6 +138,8 @@ void showPrint(const m5::rtc_date_t& date, bool announceRecipe = false) {
   auto info = slow_draw::makePrintInfo(date.year, date.month, date.date, variant,
                                        recipeMode, cadenceMode ? displayedHour : -1);
   if (recipeMode != 0) info.system = selectedSystem();
+  std::snprintf(renderedReplayCode,sizeof(renderedReplayCode),"%02X%08X",
+                unsigned(info.generatorVersion),unsigned(info.seed));
   slow_draw::renderPrint(printCanvas, info);
   if (announceRecipe) {
     printCanvas.fillRect(300, slow_draw::kCanvasHeight - slow_draw::kFooterHeight,
@@ -173,8 +187,8 @@ void drawSettings() {
   const auto today=M5.Rtc.getDate();const auto now=M5.Rtc.getTime();
   char clockLabel[64];
   if(!cadenceMode)std::snprintf(clockLabel,sizeof(clockLabel),"%04d.%02d.%02d  %02d:%02d  /  NEXT 00:00",today.year,today.month,today.date,now.hours,now.minutes);
-  else if(now.hours>=17)std::snprintf(clockLabel,sizeof(clockLabel),"%04d.%02d.%02d  %02d:%02d  /  NEXT 07:00 TOMORROW",today.year,today.month,today.date,now.hours,now.minutes);
-  else std::snprintf(clockLabel,sizeof(clockLabel),"%04d.%02d.%02d  %02d:%02d  /  NEXT %02d:00",today.year,today.month,today.date,now.hours,now.minutes,now.hours<7?7:now.hours+1);
+  else if(now.hours>=kDeskEndHour)std::snprintf(clockLabel,sizeof(clockLabel),"%04d.%02d.%02d  %02d:%02d  /  NEXT 07:00 TOMORROW",today.year,today.month,today.date,now.hours,now.minutes);
+  else std::snprintf(clockLabel,sizeof(clockLabel),"%04d.%02d.%02d  %02d:%02d  /  NEXT %02d:00",today.year,today.month,today.date,now.hours,now.minutes,now.hours<kDeskStartHour?kDeskStartHour:now.hours+1);
   printCanvas.setTextColor(0,15);printCanvas.setTextSize(2);printCanvas.setTextDatum(middle_left);printCanvas.drawString("NEW ARTWORK",50,95);
   button(50,120,410,70,"DAILY",cadenceMode==0);button(500,120,410,70,"HOURLY",cadenceMode==1);
   printCanvas.setTextColor(5,15);printCanvas.setTextDatum(middle_center);
@@ -207,6 +221,8 @@ void showSettings() {
 
 void showSeed(uint32_t seed, uint32_t generatorVersion) {
   const auto info = slow_draw::makeSeedPrintInfo(seed, generatorVersion);
+  std::snprintf(renderedReplayCode,sizeof(renderedReplayCode),"%02X%08X",
+                unsigned(generatorVersion),unsigned(seed));
   slow_draw::renderPrint(printCanvas, info);
   printCanvas.pushSprite(0, 0);
   Serial.printf("SDREADY SEED %02X%08X\n", unsigned(generatorVersion), unsigned(seed));
@@ -219,8 +235,8 @@ void sendFramebuffer() {
       slow_draw::kCanvasWidth * slow_draw::kCanvasHeight / 2;
   // Discard repeated requests that may have accumulated while the display rendered.
   while (Serial.available()) Serial.read();
-  Serial.printf("SDFRAME %d %d 4 %u\n", slow_draw::kCanvasWidth,
-                slow_draw::kCanvasHeight, unsigned(packedBytes));
+  Serial.printf("SDFRAME %d %d 4 %u %s\n", slow_draw::kCanvasWidth,
+                slow_draw::kCanvasHeight, unsigned(packedBytes),renderedReplayCode);
 
   uint8_t row[slow_draw::kCanvasWidth / 2];
   for (int y = 0; y < slow_draw::kCanvasHeight; ++y) {
@@ -294,23 +310,56 @@ void processSerial() {
 }
 
 void sleepUntilInputOrNextPrint() {
+  const auto sleepDate=M5.Rtc.getDate();const auto sleepTime=M5.Rtc.getTime();
+  if(!cadenceMode||sleepTime.hours<kDeskStartHour||sleepTime.hours>=kDeskEndHour){
+    m5::rtc_date_t wakeDate=sleepDate;
+    m5::rtc_time_t wakeTime(cadenceMode?kDeskStartHour:0,0,0);
+    if(!cadenceMode||sleepTime.hours>=kDeskEndHour)wakeDate=nextDate(wakeDate);
+    Serial.printf("SDSHUTDOWN until %04d.%02d.%02d %02d:%02d\n",
+        wakeDate.year,wakeDate.month,wakeDate.date,wakeTime.hours,wakeTime.minutes);
+    Serial.flush();
+    M5.Power.timerSleep(wakeDate,wakeTime);
+    return;
+  }
+  constexpr uint32_t kInputReleaseTimeoutMs = 1000;
+  const uint32_t releaseStarted = millis();
   while (digitalRead(kRockerLeftPin) == LOW || digitalRead(kRockerPressPin) == LOW ||
          digitalRead(kRockerRightPin) == LOW || digitalRead(kTouchWakePin) == LOW) {
     // Reading the touch controller also clears its latched interrupt.
     M5.update();
+    if (millis() - releaseStarted >= kInputReleaseTimeoutMs) break;
     delay(10);
   }
   const auto time = M5.Rtc.getTime();
   esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
-  gpio_wakeup_enable(kRockerLeftPin, GPIO_INTR_LOW_LEVEL);
-  gpio_wakeup_enable(kRockerPressPin, GPIO_INTR_LOW_LEVEL);
-  gpio_wakeup_enable(kRockerRightPin, GPIO_INTR_LOW_LEVEL);
-  gpio_wakeup_enable(kTouchWakePin, GPIO_INTR_LOW_LEVEL);
-  esp_sleep_enable_gpio_wakeup();
+  gpio_wakeup_disable(kRockerLeftPin);
+  gpio_wakeup_disable(kRockerPressPin);
+  gpio_wakeup_disable(kRockerRightPin);
+  gpio_wakeup_disable(kTouchWakePin);
+  bool gpioWakeEnabled = false;
+  auto enableReleasedInput=[&gpioWakeEnabled](gpio_num_t pin,const char* name){
+    if(digitalRead(pin)==HIGH){
+      if(gpio_wakeup_enable(pin,GPIO_INTR_LOW_LEVEL)==ESP_OK)gpioWakeEnabled=true;
+    }else{
+      Serial.printf("SDSLEEP ignored stuck input %s (GPIO%d)\n",name,int(pin));
+    }
+  };
+  enableReleasedInput(kRockerLeftPin,"rocker-left");
+  enableReleasedInput(kRockerPressPin,"rocker-press");
+  enableReleasedInput(kRockerRightPin,"rocker-right");
+  enableReleasedInput(kTouchWakePin,"touch");
+  if(gpioWakeEnabled)esp_sleep_enable_gpio_wakeup();
   esp_sleep_enable_timer_wakeup(static_cast<uint64_t>(secondsUntilNextPrint(time)) * 1000000ULL);
   uart_set_wakeup_threshold(UART_NUM_0, 3);
   esp_sleep_enable_uart_wakeup(UART_NUM_0);
+  M5.Display.sleep();
+  M5.Display.waitDisplay();
   esp_light_sleep_start();
+  M5.Display.wakeup();
+  const auto wakeDate=M5.Rtc.getDate();const auto wakeTime=M5.Rtc.getTime();
+  Serial.printf("SDWAKE cause=%d rtc=%04d.%02d.%02d %02d:%02d:%02d battery=%d%%\n",
+      int(esp_sleep_get_wakeup_cause()),wakeDate.year,wakeDate.month,wakeDate.date,
+      wakeTime.hours,wakeTime.minutes,wakeTime.seconds,int(M5.Power.getBatteryLevel()));
 }
 
 }  // namespace

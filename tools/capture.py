@@ -160,11 +160,11 @@ def save_png(path, width, height, packed):
         output.write(png)
 
 
-def next_capture_path():
+def next_capture_path(seed_identity):
     number = 1
     while True:
-        path = f"slow-draw-{number:03d}.png"
-        if not os.path.exists(path):
+        path = f"slow-draw-{number:03d}-{seed_identity}.png"
+        if not glob.glob(f"slow-draw-{number:03d}*.png"):
             return path
         number += 1
 
@@ -206,7 +206,6 @@ def main():
     args = parser.parse_args()
     if args.variant is not None and args.seed is not None:
         parser.error("--variant and --seed cannot be used together")
-    output_path = args.output or next_capture_path()
     port = args.port or find_port()
 
     fd = os.open(port, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
@@ -224,11 +223,13 @@ def main():
         while b"\n" not in response[header_start:]:
             response += read_some(fd)
         header_end = response.index(b"\n", header_start)
-        _, width, height, depth, length = response[header_start:header_end].decode().split()
+        _, width, height, depth, length, seed_identity = response[header_start:header_end].decode().split()
         width, height, depth, length = map(int, (width, height, depth, length))
-        if depth != 4 or length != width * height // 2:
+        if (depth != 4 or length != width * height // 2 or
+                re.fullmatch(r"[0-9A-F]{10}", seed_identity) is None):
             raise SystemExit("Unexpected framebuffer format from device.")
         packed = read_exact(fd, response[header_end + 1:], length)
+        output_path = args.output or next_capture_path(seed_identity)
         save_png(output_path, width, height, packed)
         print(f"Saved {width}x{height} capture from {port} to {output_path}")
         if not args.no_preview:

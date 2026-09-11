@@ -1,6 +1,8 @@
 import argparse
 import importlib.util
 from pathlib import Path
+import os
+import tempfile
 import unittest
 
 
@@ -35,6 +37,19 @@ class CaptureValidationTests(unittest.TestCase):
         for value in ("E92B7DE2", "0F7DE2", "0EE92B7DE2", "0F100000000"):
             with self.subTest(value=value), self.assertRaises(argparse.ArgumentTypeError):
                 capture.parse_seed_identity(value)
+
+    def test_default_capture_path_contains_seed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            previous = os.getcwd()
+            try:
+                os.chdir(directory)
+                self.assertEqual(capture.next_capture_path("0FE92B7DE2"),
+                                 "slow-draw-001-0FE92B7DE2.png")
+                Path("slow-draw-001-0FE92B7DE2.png").touch()
+                self.assertEqual(capture.next_capture_path("0FE92B7DE2"),
+                                 "slow-draw-002-0FE92B7DE2.png")
+            finally:
+                os.chdir(previous)
 
 
 class FirmwareRandomTests(unittest.TestCase):
