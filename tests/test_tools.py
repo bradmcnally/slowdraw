@@ -31,10 +31,10 @@ class CaptureValidationTests(unittest.TestCase):
                 capture.parse_variant(value)
 
     def test_accepts_complete_versioned_seed(self):
-        self.assertEqual(capture.parse_seed_identity("0fe92b7de2"), (15, 0xE92B7DE2))
+        self.assertEqual(capture.parse_seed_identity("11e92b7de2"), (17, 0xE92B7DE2))
 
     def test_rejects_incomplete_or_wrong_version_seed(self):
-        for value in ("E92B7DE2", "0F7DE2", "0EE92B7DE2", "0F100000000"):
+        for value in ("E92B7DE2", "117DE2", "10E92B7DE2", "11100000000"):
             with self.subTest(value=value), self.assertRaises(argparse.ArgumentTypeError):
                 capture.parse_seed_identity(value)
 
@@ -43,11 +43,11 @@ class CaptureValidationTests(unittest.TestCase):
             previous = os.getcwd()
             try:
                 os.chdir(directory)
-                self.assertEqual(capture.next_capture_path("0FE92B7DE2"),
-                                 "slow-draw-001-0FE92B7DE2.png")
-                Path("slow-draw-001-0FE92B7DE2.png").touch()
-                self.assertEqual(capture.next_capture_path("0FE92B7DE2"),
-                                 "slow-draw-002-0FE92B7DE2.png")
+                self.assertEqual(capture.next_capture_path("11E92B7DE2"),
+                                 "slow-draw-001-11E92B7DE2.png")
+                Path("slow-draw-001-11E92B7DE2.png").touch()
+                self.assertEqual(capture.next_capture_path("11E92B7DE2"),
+                                 "slow-draw-002-11E92B7DE2.png")
             finally:
                 os.chdir(previous)
 
@@ -63,7 +63,8 @@ class FirmwareRandomTests(unittest.TestCase):
 
     def test_active_studies_have_device_canvas_dimensions(self):
         for generator in (studies.cellular_aggregate, studies.pixel_field,
-                          studies.subdivision, studies.dither_pressure):
+                          studies.subdivision, studies.dither_pressure,
+                          studies.topography, studies.amoeba):
             image = generator(0xC1234567)
             self.assertEqual((len(image), len(image[0])), (124, 240))
 

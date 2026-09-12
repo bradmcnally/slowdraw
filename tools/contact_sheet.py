@@ -25,6 +25,14 @@ def put(a,x,y,v):
 def block(a,x,y,w,h,v):
     for yy in range(max(0,y),min(H,y+h)):
         for xx in range(max(0,x),min(W,x+w)): put(a,xx,yy,v)
+def line(a,x0,y0,x1,y1,v):
+    dx=abs(x1-x0); sx=1 if x0<x1 else -1; dy=-abs(y1-y0); sy=1 if y0<y1 else -1; error=dx+dy
+    while True:
+        put(a,x0,y0,v)
+        if x0==x1 and y0==y1: break
+        twice=2*error
+        if twice>=dy: error+=dy; x0+=sx
+        if twice<=dx: error+=dx; y0+=sy
 def write_pgm(a,path):
     height,width=len(a),len(a[0])
     with path.open("wb") as f:
@@ -410,6 +418,77 @@ def murmuration(seed, diffusion=False, fine=False):
             if field>.9 and r.chance(.10): put(a,x,y+1,r.range(0,3))
     return a
 
+def topography(seed):
+    r=FirmwareRandom(seed); a=canvas(0); count=r.range(5,9)
+    hills=[]
+    for _ in range(count):
+        x=r.range(-35,W+36); y=r.range(-28,CONTENT_H+29); rx=r.range(25,72); ry=r.range(18,55)
+        height=r.unit()*1.6+.45 if r.chance(.62) else -(r.unit()*1.1+.35)
+        hills.append((x,y,rx,ry,height))
+    phase=r.unit()*math.tau; warp_phase=r.unit()*math.tau; interval=.31+r.unit()*.10
+    elevation=[]
+    for y in range(CONTENT_H):
+        row=[]
+        for x in range(W):
+            wx=x+10*math.sin(y*.035+warp_phase)+4*math.sin((x+y)*.021-phase)
+            wy=y+8*math.cos(x*.027-phase)+3*math.cos((x-y)*.019+warp_phase)
+            value=.28*math.sin(wx*.030+phase)+.22*math.cos(wy*.043-phase*.7)+.15*math.sin((wx+wy)*.019)
+            for hx,hy,rx,ry,height in hills:
+                dx=wx-hx; dy=wy-hy
+                value+=height*math.exp(-(dx*dx/(2*rx*rx)+dy*dy/(2*ry*ry)))
+            row.append(value)
+        elevation.append(row)
+    ink=r.range(11,16)
+    for y in range(CONTENT_H-1):
+        for x in range(W-1):
+            band=math.floor(elevation[y][x]/interval)
+            if band!=math.floor(elevation[y][x+1]/interval) or band!=math.floor(elevation[y+1][x]/interval):
+                block(a,x,y,2,2,ink)
+    return a
+
+def amoeba(seed):
+    r=FirmwareRandom(seed); a=canvas(15); cell=2 if r.chance(.72) else 3
+    cols=W//cell; rows=CONTENT_H//cell; ecology=r.range(0,4); focus_count=r.range(2,6)
+    focuses=[(r.range(0,cols),r.range(0,rows),r.range(7,22),1 if r.chance(.72 if ecology==2 else .5) else -1) for _ in range(focus_count)]
+    phase=r.unit()*math.tau
+    base=(.34+r.unit()*.06) if ecology==0 else ((.50+r.unit()*.08) if ecology==2 else (.40+r.unit()*.09))
+    current=[]
+    for y in range(rows):
+        row=[]
+        for x in range(cols):
+            field=sum(weight*math.exp(-((x-fx)**2+(y-fy)**2)/(2*radius*radius)) for fx,fy,radius,weight in focuses)
+            drift=.06*math.sin(x*.10+phase)+.05*math.cos(y*.14-phase*.6)
+            if ecology==1: drift+=.13*math.sin((x+y)*.075+phase)
+            elif ecology==3: drift+=.11*math.cos((x-y)*.09-phase)
+            drift+=field*(.16 if ecology==0 else .11)
+            row.append(r.unit()<max(.24,min(.68,base+drift)))
+        current.append(row)
+    generations=r.range(3,6) if ecology==0 else (r.range(6,10) if ecology==2 else r.range(4,9))
+    for _ in range(generations):
+        nxt=[[False for _ in range(cols)] for _ in range(rows)]
+        for y in range(rows):
+            for x in range(cols):
+                neighbors=sum(current[(y+dy)%rows][(x+dx)%cols] for dy in (-1,0,1) for dx in (-1,0,1) if dx or dy)
+                survive=5 if ecology==2 else 4; birth=4 if ecology==3 else 5
+                nxt[y][x]=neighbors>=survive if current[y][x] else neighbors>=birth
+        current=nxt
+    field=[[4080 if current[y//cell][x//cell] else 0 for x in range(W)] for y in range(CONTENT_H)]
+    for _ in range(r.range(6,12)):
+        softened=[]
+        for y in range(CONTENT_H):
+            row=[]
+            for x in range(W):
+                values=[field[sy][sx] for sy in range(max(0,y-1),min(CONTENT_H,y+2)) for sx in range(max(0,x-1),min(W,x+2))]
+                row.append((sum(values)//len(values)//16)*16)
+            softened.append(row)
+        field=softened
+    nested=r.chance(.34); interval=r.range(1350,1900) if nested else r.range(1900,2800); ink=r.range(0,5)
+    for y in range(CONTENT_H-1):
+        for x in range(W-1):
+            band=field[y][x]//interval
+            if band!=field[y][x+1]//interval or band!=field[y+1][x]//interval: put(a,x,y,ink)
+    return a
+
 SYSTEMS={
     "scanline-erosion":scanline_erosion,
     "motif-field":motif_field,
@@ -430,6 +509,8 @@ SYSTEMS={
     "murmuration":murmuration,
     "murmuration-diffusion":lambda seed: murmuration(seed,True),
     "murmuration-diffusion-half-pixels":lambda seed: murmuration(seed,True,True),
+    "topography":topography,
+    "amoeba":amoeba,
     "dither-pressure-ordered-large":lambda seed: dither_pressure(seed,0,4),
     "dither-pressure-diffusion-large":lambda seed: dither_pressure(seed,1,4),
 }

@@ -30,36 +30,25 @@ grayscale levels, and sleeps until the next scheduled print or user interaction.
 ### Hourly
 
 Hourly mode creates a new deterministic artwork at 07:00 and every whole hour
-through 19:00, for 13 artworks per day. From 07:00 until the 19:00 artwork, the
-device uses light sleep between updates. During this window, tapping the screen
-opens `PRINT OPTIONS`, pressing the center rocker generates another variant for
-the active hour, and pressing the rocker left or right changes the recipe.
-
-After rendering the 19:00 artwork, the device enters RTC-controlled shutdown.
-The e-ink panel retains that artwork without power. At 07:00 the next morning,
-the RTC powers the device on and it automatically renders the new 07:00
-artwork. While shut down, screen taps and rocker directions are unavailable;
-pressing the center rocker powers the device on manually.
+through 19:00, for 13 artworks per day. The 19:00 artwork remains displayed
+overnight until the new 07:00 artwork is rendered automatically. Between
+updates, the ESP32 and e-paper controller use light sleep. Tapping the screen
+opens `PRINT OPTIONS`, and pressing the center rocker generates another variant
+for the active hour. The rocker directions have no assigned action.
 
 ### Daily
 
-Daily mode creates one deterministic artwork at 00:00, then uses RTC-controlled
-shutdown until the following midnight. The retained artwork remains visible
-while the device is off. Pressing the center rocker powers it on manually and
-rerenders the current day's artwork; it does not create a new daily seed.
-
-RTC-controlled shutdown gives Daily mode the lowest idle power consumption.
-As in Hourly's overnight period, touch and rocker-direction input are not
-available while the device is shut down.
+Daily mode creates one deterministic artwork at 00:00 and retains it until the
+following midnight. It uses the same light-sleep path between updates, so touch
+and the center rocker remain available throughout the day.
 
 ### Options and manual variants
 
 When the device is awake, tap the artwork to open `PRINT OPTIONS`. It shows the
 10-character replay code, battery estimate, RTC date and time, and next
 scheduled artwork time. Press the center rocker while awake to generate the
-next deterministic variant for the current day or active hour. Press the rocker
-left or right to cycle the recipe preference: `ALL`, `CELLULAR`, `PIXEL FIELD`,
-`SUBDIVISION`, `DITHER`, or `MURMURATION`.
+next deterministic variant for the current day or active hour. Choose the recipe
+preference from the Options screen.
 
 ## Build and upload
 
@@ -87,6 +76,27 @@ An explicit date and time can also be supplied:
 ```
 
 Setting the clock rerenders the appropriate daily or desk-hours hourly print.
+
+## RTC wake validation
+
+RTC-controlled shutdown is not used for normal operation until it has been
+validated on the physical device. To run a two-minute battery-powered test:
+
+```sh
+./tools/wake_test.py 2
+```
+
+When the device displays `UNPLUG USB NOW`, disconnect the cable within 15
+seconds. The BM8563 should power the M5Paper on at the displayed target time.
+The result screen records whether the RTC alarm flag caused the boot, the actual
+wake time, reset reason, and battery reading. Hold the center rocker for two
+seconds to recover manually if the alarm does not power the device on.
+
+The result is also saved, so it can be checked later after reconnecting USB:
+
+```sh
+./tools/wake_test.py --status
+```
 
 ## Framebuffer capture
 

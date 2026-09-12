@@ -23,7 +23,7 @@ PORT_PATTERNS = (
     "/dev/ttyUSB*",
     "/dev/ttyACM*",
 )
-CURRENT_GENERATOR_VERSION = 15
+CURRENT_GENERATOR_VERSION = 17
 EINK_PALETTE = (
     (55, 55, 55), (63, 63, 63), (70, 70, 70), (78, 78, 78),
     (87, 87, 87), (97, 97, 97), (111, 111, 111), (115, 115, 115),
